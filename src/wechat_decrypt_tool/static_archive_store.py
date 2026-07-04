@@ -345,6 +345,111 @@ def set_checkpoint(
         conn.close()
 
 
+def list_messages_chrono(
+    account: str,
+    username: str,
+    *,
+    start_time: int = 0,
+    end_time: int = 0,
+    limit: int = 0,
+) -> list[dict[str, Any]]:
+    """Return archived messages in ascending chronological order (for AI context).
+
+    If ``limit`` > 0, keep the most recent ``limit`` within the time range, still
+    returned ascending. ``start_time``/``end_time`` (Unix seconds) are optional.
+    """
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        clauses = ["account=?", "username=?"]
+        params: list[Any] = [account, username]
+        if start_time:
+            clauses.append("create_time>=?")
+            params.append(int(start_time))
+        if end_time:
+            clauses.append("create_time<=?")
+            params.append(int(end_time))
+        where = " AND ".join(clauses)
+        if limit and int(limit) > 0:
+            rows = conn.execute(
+                f"SELECT payload FROM messages WHERE {where}"
+                " ORDER BY create_time DESC, local_id DESC LIMIT ?",
+                (*params, int(limit)),
+            ).fetchall()
+            rows = list(reversed(rows))
+        else:
+            rows = conn.execute(
+                f"SELECT payload FROM messages WHERE {where}"
+                " ORDER BY create_time ASC, local_id ASC",
+                params,
+            ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                out.append(json.loads(r["payload"]))
+            except Exception:
+                continue
+        return out
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# AI artifacts (summaries / profiles)
+# ---------------------------------------------------------------------------
+
+def add_ai_artifact(account: str, username: str, kind: str, scope: dict[str, Any], content: str) -> int:
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        cur = conn.execute(
+            "INSERT INTO ai_artifacts (account, username, kind, scope_json, content, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (account, username, kind, json.dumps(scope, ensure_ascii=False), content, int(time.time())),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def list_ai_artifacts(
+    account: str, username: str, *, kind: Optional[str] = None, limit: int = 20
+) -> list[dict[str, Any]]:
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        clauses = ["account=?", "username=?"]
+        params: list[Any] = [account, username]
+        if kind:
+            clauses.append("kind=?")
+            params.append(kind)
+        where = " AND ".join(clauses)
+        rows = conn.execute(
+            f"SELECT id, kind, scope_json, content, created_at FROM ai_artifacts"
+            f" WHERE {where} ORDER BY created_at DESC LIMIT ?",
+            (*params, int(limit)),
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                scope = json.loads(r["scope_json"] or "{}")
+            except Exception:
+                scope = {}
+            out.append(
+                {
+                    "id": int(r["id"]),
+                    "kind": r["kind"],
+                    "scope": scope,
+                    "content": r["content"] or "",
+                    "createdAt": int(r["created_at"] or 0),
+                }
+            )
+        return out
+    finally:
+        conn.close()
+
+
 def compute_checkpoint_from_messages(messages: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
     """Pick the newest message (max createTime) as the checkpoint cursor."""
     best: Optional[dict[str, Any]] = None
