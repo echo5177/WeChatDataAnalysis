@@ -37,6 +37,7 @@ from .routers.media import router as _media_router
 from .routers.mcp import router as _mcp_router
 from .routers.sns import router as _sns_router
 from .routers.sns_export import router as _sns_export_router
+from .routers.static_chat import router as _static_chat_router
 from .routers.wechat_detection import router as _wechat_detection_router
 from .routers.wrapped import router as _wrapped_router
 from .routers.general import router as _general_router
@@ -151,6 +152,7 @@ app.include_router(_chat_export_router)
 app.include_router(_chat_media_router)
 app.include_router(_sns_router)
 app.include_router(_sns_export_router)
+app.include_router(_static_chat_router)
 app.include_router(_wrapped_router)
 app.include_router(_biz_router)
 app.include_router(_general_router)
