@@ -230,6 +230,23 @@
         </div>
       </div>
 
+      <!-- Static archive -->
+      <div
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        title="静态归档"
+        @click="goStatic"
+      >
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <div class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': isStaticRoute }">
+            <svg class="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="4" rx="1" />
+              <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+              <path d="M10 12h4" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
       <!-- Export -->
       <div
         v-if="showGlobalExportEntry"
@@ -783,6 +800,7 @@ const isMiniProgramsRoute = computed(() => route.path?.startsWith('/mini-program
 const isFinderRoute = computed(() => route.path?.startsWith('/finder'))
 const isPaymentsRoute = computed(() => route.path?.startsWith('/payments'))
 const isWrappedRoute = computed(() => route.path?.startsWith('/wrapped'))
+const isStaticRoute = computed(() => route.path?.startsWith('/static-chat'))
 
 const goChat = async () => { await navigateTo('/chat') }
 const goSns = async () => { await navigateTo('/sns') }
@@ -793,6 +811,7 @@ const goMiniPrograms = async () => { await navigateTo('/mini-programs') }
 const goFinder = async () => { await navigateTo('/finder') }
 const goPayments = async () => { await navigateTo('/payments') }
 const goWrapped = async () => { await navigateTo('/wrapped') }
+const goStatic = async () => { await navigateTo('/static-chat') }
 const goGuide = async () => { await navigateTo('/') }
 const goSettings = () => { openSettingsDialog() }
 
