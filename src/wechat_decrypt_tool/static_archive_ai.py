@@ -32,6 +32,11 @@ DEFAULT_MODEL = "deepseek-chat"
 _TRANSCRIPT_CHAR_BUDGET = 16000
 _DEFAULT_MAX_MESSAGES = 500
 
+# Multi-turn chat context: bigger budget (user doesn't mind tokens, but the model's
+# context window is still finite — keep the most recent within these bounds).
+_CHAT_CONTEXT_MAX_MESSAGES = 2500
+_CHAT_TRANSCRIPT_CHAR_BUDGET = 48000
+
 _MEDIA_PLACEHOLDER = {
     "image": "[图片]",
     "video": "[视频]",
@@ -93,7 +98,7 @@ def _fmt_time(ts: Any) -> str:
         return ""
 
 
-def build_transcript(messages: list[dict[str, Any]]) -> str:
+def build_transcript(messages: list[dict[str, Any]], *, char_budget: int = _TRANSCRIPT_CHAR_BUDGET) -> str:
     lines: list[str] = []
     for m in messages:
         if not isinstance(m, dict):
@@ -111,11 +116,63 @@ def build_transcript(messages: list[dict[str, Any]]) -> str:
             continue
         lines.append(f"[{_fmt_time(m.get('createTime'))}] {sender}: {content}")
     text = "\n".join(lines)
-    if len(text) > _TRANSCRIPT_CHAR_BUDGET:
+    if len(text) > char_budget:
         # keep the most recent portion
-        text = text[-_TRANSCRIPT_CHAR_BUDGET:]
+        text = text[-char_budget:]
         text = text[text.find("\n") + 1:]
     return text
+
+
+def build_chat_context(chat: dict[str, Any]) -> tuple[str, int]:
+    """Build the system message (context transcript + role instruction) for a chat."""
+    account = chat["account"]
+    username = chat["username"]
+    msgs = store.list_messages_chrono(
+        account,
+        username,
+        start_time=int(chat.get("startTime") or 0),
+        end_time=int(chat.get("endTime") or 0),
+        limit=_CHAT_CONTEXT_MAX_MESSAGES,
+    )
+    transcript = build_transcript(msgs, char_budget=_CHAT_TRANSCRIPT_CHAR_BUDGET)
+
+    conv = next((c for c in store.list_conversations(account) if c["username"] == username), None)
+    conv_name = (conv or {}).get("name") or username
+
+    if chat.get("kind") == "profile":
+        target = str(chat.get("targetName") or chat.get("targetUser") or "该用户").strip()
+        system = (
+            "你是一名中文人物画像与对话分析助手。下面提供的是一个群聊的聊天记录（多人对话）。"
+            f"用户想重点了解其中的「{target}」这个人。请务必结合整个群聊的上下文——其他人说了什么、"
+            f"大家如何回应「{target}」——来判断 TA 的角色、性格、关注点、专业能力与互动关系，"
+            "而不要只看 TA 自己发的内容。只依据聊天记录客观分析，不确定处标注（推测），避免刻板印象。"
+            f"\n\n【群聊「{conv_name}」聊天记录】\n{transcript}"
+        )
+    else:
+        system = (
+            "你是一名严谨的中文聊天记录分析助手。下面是一段会话/群聊的聊天记录，"
+            "请依据它回答用户的问题；不要编造记录中不存在的信息，无法确定的地方要说明。"
+            f"\n\n【会话「{conv_name}」聊天记录】\n{transcript}"
+        )
+    return system, len(msgs)
+
+
+def run_chat_turn(
+    chat: dict[str, Any],
+    history: list[dict[str, Any]],
+    user_message: str,
+    *,
+    model: Optional[str] = None,
+) -> str:
+    """Run one multi-turn chat step: system context + prior turns + new user message."""
+    system, _ctx = build_chat_context(chat)
+    messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+    for h in history:
+        role = str(h.get("role") or "")
+        if role in ("user", "assistant"):
+            messages.append({"role": role, "content": str(h.get("content") or "")})
+    messages.append({"role": "user", "content": user_message})
+    return _chat(messages, model=model, max_tokens=3000)
 
 
 def _chat(

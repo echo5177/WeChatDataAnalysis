@@ -101,6 +101,34 @@ def _ensure_initialized(conn: sqlite3.Connection) -> None:
                 content TEXT DEFAULT '',
                 created_at INTEGER DEFAULT 0
             );
+
+            CREATE TABLE IF NOT EXISTS ai_chats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account TEXT NOT NULL,
+                username TEXT NOT NULL,
+                kind TEXT NOT NULL,            -- 'summary' | 'profile'
+                target_user TEXT DEFAULT '',   -- profile: sender username being analysed
+                target_name TEXT DEFAULT '',
+                title TEXT DEFAULT '',
+                start_time INTEGER DEFAULT 0,
+                end_time INTEGER DEFAULT 0,
+                created_at INTEGER DEFAULT 0,
+                updated_at INTEGER DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ai_chats_conv
+                ON ai_chats(account, username, kind, updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS ai_chat_turns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER NOT NULL,
+                role TEXT NOT NULL,            -- 'user' | 'assistant'
+                content TEXT DEFAULT '',
+                created_at INTEGER DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_ai_chat_turns_chat
+                ON ai_chat_turns(chat_id, id);
             """
         )
         conn.commit()
@@ -446,6 +474,208 @@ def list_ai_artifacts(
                 }
             )
         return out
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Members (per-sender activity, for user profiles)
+# ---------------------------------------------------------------------------
+
+def list_members(
+    account: str, username: str, *, start_time: int = 0, end_time: int = 0, top: int = 300
+) -> list[dict[str, Any]]:
+    """Aggregate per-sender message counts from the archive, sorted by activity."""
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        clauses = ["account=?", "username=?"]
+        params: list[Any] = [account, username]
+        if start_time:
+            clauses.append("create_time>=?")
+            params.append(int(start_time))
+        if end_time:
+            clauses.append("create_time<=?")
+            params.append(int(end_time))
+        where = " AND ".join(clauses)
+        rows = conn.execute(f"SELECT payload FROM messages WHERE {where}", params).fetchall()
+        counts: dict[str, int] = {}
+        names: dict[str, str] = {}
+        for r in rows:
+            try:
+                m = json.loads(r["payload"])
+            except Exception:
+                continue
+            if m.get("isSent"):
+                key, nm = "__self__", "我"
+            else:
+                key = str(m.get("senderUsername") or "").strip()
+                if not key:
+                    continue
+                nm = str(m.get("senderDisplayName") or "").strip() or key
+            counts[key] = counts.get(key, 0) + 1
+            if nm and (key not in names or names[key] == key):
+                names[key] = nm
+        members = [
+            {"username": k, "name": names.get(k, k), "count": v, "isSelf": k == "__self__"}
+            for k, v in counts.items()
+        ]
+        members.sort(key=lambda x: x["count"], reverse=True)
+        return members[:top]
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# AI chats (multi-turn, with memory)
+# ---------------------------------------------------------------------------
+
+def create_ai_chat(
+    account: str,
+    username: str,
+    kind: str,
+    *,
+    target_user: str = "",
+    target_name: str = "",
+    title: str = "",
+    start_time: int = 0,
+    end_time: int = 0,
+) -> int:
+    now = int(time.time())
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        cur = conn.execute(
+            "INSERT INTO ai_chats (account, username, kind, target_user, target_name, title,"
+            " start_time, end_time, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (account, username, kind, target_user, target_name, title,
+             int(start_time or 0), int(end_time or 0), now, now),
+        )
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def _chat_row_to_dict(r: Any, turn_count: int = 0) -> dict[str, Any]:
+    return {
+        "id": int(r["id"]),
+        "account": r["account"],
+        "username": r["username"],
+        "kind": r["kind"],
+        "targetUser": r["target_user"] or "",
+        "targetName": r["target_name"] or "",
+        "title": r["title"] or "",
+        "startTime": int(r["start_time"] or 0),
+        "endTime": int(r["end_time"] or 0),
+        "createdAt": int(r["created_at"] or 0),
+        "updatedAt": int(r["updated_at"] or 0),
+        "turnCount": int(turn_count),
+    }
+
+
+def list_ai_chats(
+    account: str, username: str, *, kind: Optional[str] = None, target_user: Optional[str] = None
+) -> list[dict[str, Any]]:
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        clauses = ["c.account=?", "c.username=?"]
+        params: list[Any] = [account, username]
+        if kind:
+            clauses.append("c.kind=?")
+            params.append(kind)
+        if target_user is not None:
+            clauses.append("c.target_user=?")
+            params.append(target_user)
+        where = " AND ".join(clauses)
+        rows = conn.execute(
+            f"SELECT c.*, (SELECT COUNT(*) FROM ai_chat_turns t WHERE t.chat_id=c.id) AS tc"
+            f" FROM ai_chats c WHERE {where} ORDER BY c.updated_at DESC",
+            params,
+        ).fetchall()
+        return [_chat_row_to_dict(r, r["tc"]) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_ai_chat(chat_id: int) -> Optional[dict[str, Any]]:
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        r = conn.execute("SELECT * FROM ai_chats WHERE id=?", (int(chat_id),)).fetchone()
+        if r is None:
+            return None
+        tc = conn.execute("SELECT COUNT(*) AS c FROM ai_chat_turns WHERE chat_id=?", (int(chat_id),)).fetchone()["c"]
+        return _chat_row_to_dict(r, tc)
+    finally:
+        conn.close()
+
+
+def has_empty_ai_chat(account: str, username: str, kind: str, target_user: str = "") -> bool:
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        r = conn.execute(
+            "SELECT c.id FROM ai_chats c WHERE c.account=? AND c.username=? AND c.kind=? AND c.target_user=?"
+            " AND (SELECT COUNT(*) FROM ai_chat_turns t WHERE t.chat_id=c.id)=0 LIMIT 1",
+            (account, username, kind, target_user),
+        ).fetchone()
+        return r is not None
+    finally:
+        conn.close()
+
+
+def delete_ai_chat(chat_id: int) -> None:
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        conn.execute("DELETE FROM ai_chat_turns WHERE chat_id=?", (int(chat_id),))
+        conn.execute("DELETE FROM ai_chats WHERE id=?", (int(chat_id),))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def add_ai_chat_turn(chat_id: int, role: str, content: str) -> int:
+    now = int(time.time())
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        cur = conn.execute(
+            "INSERT INTO ai_chat_turns (chat_id, role, content, created_at) VALUES (?, ?, ?, ?)",
+            (int(chat_id), role, content, now),
+        )
+        conn.execute("UPDATE ai_chats SET updated_at=? WHERE id=?", (now, int(chat_id)))
+        conn.commit()
+        return int(cur.lastrowid or 0)
+    finally:
+        conn.close()
+
+
+def list_ai_chat_turns(chat_id: int) -> list[dict[str, Any]]:
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        rows = conn.execute(
+            "SELECT role, content, created_at FROM ai_chat_turns WHERE chat_id=? ORDER BY id ASC",
+            (int(chat_id),),
+        ).fetchall()
+        return [
+            {"role": r["role"], "content": r["content"] or "", "createdAt": int(r["created_at"] or 0)}
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def set_ai_chat_title(chat_id: int, title: str) -> None:
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        conn.execute("UPDATE ai_chats SET title=? WHERE id=?", (title, int(chat_id)))
+        conn.commit()
     finally:
         conn.close()
 

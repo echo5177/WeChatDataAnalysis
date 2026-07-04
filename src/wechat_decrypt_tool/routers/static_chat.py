@@ -305,3 +305,134 @@ async def list_static_ai_artifacts(username: str, account: Optional[str] = None,
     account = _resolve_account(account)
     artifacts = store.list_ai_artifacts(account, username, kind=kind)
     return {"status": "success", "account": account, "username": username, "artifacts": artifacts}
+
+
+# ---------------------------------------------------------------------------
+# AI members (activity ranking, for user profiles)
+# ---------------------------------------------------------------------------
+
+@router.get("/api/static/ai/members", summary="群成员活跃度排行(供用户画像)")
+async def list_static_members(
+    username: str,
+    account: Optional[str] = None,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+):
+    if not username:
+        raise HTTPException(status_code=400, detail="Missing username.")
+    account = _resolve_account(account)
+    members = store.list_members(
+        account, username, start_time=int(start_time or 0), end_time=int(end_time or 0)
+    )
+    return {"status": "success", "account": account, "username": username, "members": members}
+
+
+# ---------------------------------------------------------------------------
+# AI chats (multi-turn with memory)
+# ---------------------------------------------------------------------------
+
+class AiChatCreateRequest(BaseModel):
+    account: Optional[str] = None
+    username: str
+    kind: Literal["summary", "profile"] = "summary"
+    target_user: str = ""
+    target_name: str = ""
+    title: str = ""
+    start_time: Optional[int] = None
+    end_time: Optional[int] = None
+
+
+@router.post("/api/static/ai/chats", summary="新建 AI 对话(总结/画像),防止重复空对话")
+def create_ai_chat_ep(req: AiChatCreateRequest):
+    if not str(req.username or "").strip():
+        raise HTTPException(status_code=400, detail="Missing username.")
+    account = _resolve_account(req.account)
+    if not ai.is_configured():
+        raise HTTPException(status_code=400, detail="未配置 LLM。请设置 LLM_API_KEY 后重启后端。")
+
+    # Prevent spamming empty chats: reuse an existing empty one for the same scope.
+    if store.has_empty_ai_chat(account, req.username, req.kind, req.target_user):
+        existing = [
+            c for c in store.list_ai_chats(account, req.username, kind=req.kind, target_user=req.target_user)
+            if c["turnCount"] == 0
+        ]
+        if existing:
+            return {"status": "success", "chat": existing[0], "reused": True}
+
+    if req.kind == "profile":
+        title = req.title or (req.target_name or req.target_user or "用户画像")
+    else:
+        title = req.title or "新对话"
+    cid = store.create_ai_chat(
+        account,
+        req.username,
+        req.kind,
+        target_user=req.target_user,
+        target_name=req.target_name,
+        title=title,
+        start_time=int(req.start_time or 0),
+        end_time=int(req.end_time or 0),
+    )
+    return {"status": "success", "chat": store.get_ai_chat(cid), "reused": False}
+
+
+@router.get("/api/static/ai/chats", summary="列出 AI 对话")
+async def list_ai_chats_ep(
+    username: str,
+    account: Optional[str] = None,
+    kind: Optional[str] = None,
+    target_user: Optional[str] = None,
+):
+    if not username:
+        raise HTTPException(status_code=400, detail="Missing username.")
+    account = _resolve_account(account)
+    chats = store.list_ai_chats(account, username, kind=kind, target_user=target_user)
+    return {"status": "success", "chats": chats}
+
+
+@router.get("/api/static/ai/chats/{chat_id}", summary="获取某个 AI 对话及其消息")
+async def get_ai_chat_ep(chat_id: int):
+    chat = store.get_ai_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    turns = store.list_ai_chat_turns(chat_id)
+    return {"status": "success", "chat": chat, "turns": turns}
+
+
+@router.delete("/api/static/ai/chats/{chat_id}", summary="删除某个 AI 对话")
+async def delete_ai_chat_ep(chat_id: int):
+    store.delete_ai_chat(chat_id)
+    return {"status": "success"}
+
+
+class AiChatSendRequest(BaseModel):
+    content: str
+    model: Optional[str] = None
+
+
+@router.post("/api/static/ai/chats/{chat_id}/send", summary="向 AI 对话发送一条消息(带记忆)")
+def send_ai_chat_ep(chat_id: int, req: AiChatSendRequest):
+    content = str(req.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="消息内容为空")
+    chat = store.get_ai_chat(chat_id)
+    if not chat:
+        raise HTTPException(status_code=404, detail="对话不存在")
+    if not ai.is_configured():
+        raise HTTPException(status_code=400, detail="未配置 LLM。请设置 LLM_API_KEY 后重启后端。")
+
+    history = store.list_ai_chat_turns(chat_id)
+    try:
+        reply = ai.run_chat_turn(chat, history, content, model=(str(req.model).strip() if req.model else None))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("[static-ai] chat turn failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"LLM 调用失败: {e}")
+
+    store.add_ai_chat_turn(chat_id, "user", content)
+    store.add_ai_chat_turn(chat_id, "assistant", reply)
+    # Auto-title from the first user message.
+    if int(chat.get("turnCount") or 0) == 0 and str(chat.get("title") or "") in ("", "新对话"):
+        store.set_ai_chat_title(chat_id, content[:20])
+    return {"status": "success", "reply": reply}
