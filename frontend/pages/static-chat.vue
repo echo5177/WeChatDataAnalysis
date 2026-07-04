@@ -91,62 +91,14 @@
       </div>
     </div>
 
-    <!-- AI analysis panel -->
-    <div v-if="aiPanelOpen && selectedContact" class="static-ai-panel flex flex-col border-l min-h-0">
-      <div class="static-panel-header flex items-center justify-between px-3 h-[52px] border-b">
-        <div class="text-sm font-medium">AI 分析</div>
-        <button type="button" class="text-gray-400 hover:text-gray-700" @click="aiPanelOpen = false">
-          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" /></svg>
-        </button>
-      </div>
-
-      <div class="flex-1 overflow-y-auto min-h-0 p-3 space-y-3">
-        <div
-          v-if="aiConfigured === false"
-          class="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] leading-relaxed text-amber-900"
-        >
-          未配置 LLM。请设置环境变量 <code>LLM_API_KEY</code>（可选 <code>LLM_BASE_URL</code> / <code>LLM_MODEL</code>）后重启后端。默认使用 DeepSeek。
-        </div>
-
-        <div v-if="aiConfigured && aiModels.length" class="flex items-center gap-2">
-          <label class="text-[11px] text-gray-400 shrink-0">模型</label>
-          <select
-            v-model="aiModel"
-            class="static-picker-input flex-1 text-xs px-2 py-1 rounded-md"
-            :disabled="aiLoading"
-          >
-            <option v-for="m in aiModels" :key="m" :value="m">{{ m }}</option>
-          </select>
-        </div>
-
-        <div class="flex items-center gap-2">
-          <button
-            type="button"
-            class="static-btn text-xs px-3 py-1.5 rounded-md flex-1"
-            :disabled="aiLoading || aiConfigured === false"
-            @click="runAnalyze('summary')"
-          >总结会话</button>
-          <button
-            type="button"
-            class="static-btn text-xs px-3 py-1.5 rounded-md flex-1"
-            :disabled="aiLoading || aiConfigured === false"
-            @click="runAnalyze('profile')"
-          >用户画像</button>
-        </div>
-        <div class="text-[11px] text-gray-400">
-          分析该会话最新的 {{ aiMaxMessages }} 条消息<span v-if="aiConfigModel"> · 模型 {{ aiConfigModel }}</span>
-        </div>
-
-        <div v-if="aiLoading" class="text-center text-xs text-gray-400 py-8">AI 分析中，请稍候...</div>
-        <div v-else-if="aiError" class="text-xs text-red-500 whitespace-pre-wrap">{{ aiError }}</div>
-        <div
-          v-else-if="aiResult"
-          class="ai-result text-[13px] leading-relaxed whitespace-pre-wrap"
-          :class="{ 'privacy-blur': privacyMode }"
-        >{{ aiResult }}</div>
-        <div v-else class="text-center text-xs text-gray-400 py-8">选择上方一种分析开始</div>
-      </div>
-    </div>
+    <!-- AI analysis panel (dedicated component: summary chatbot + user profiles) -->
+    <StaticAiPanel
+      v-if="aiPanelOpen && selectedContact"
+      :account="selectedAccount"
+      :conversation="selectedContact"
+      :privacy-mode="privacyMode"
+      @close="aiPanelOpen = false"
+    />
 
     <!-- Image preview overlay -->
     <div
@@ -224,6 +176,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import MessageList from '~/components/chat/MessageList.vue'
+import StaticAiPanel from '~/components/static-chat/StaticAiPanel.vue'
 import { useStaticApi } from '~/composables/useStaticApi'
 import { useChatMessages } from '~/composables/chat/useChatMessages'
 import { useChatHistoryWindows } from '~/composables/chat/useChatHistoryWindows'
@@ -399,7 +352,8 @@ const exportLatest = async () => {
       username: selectedContact.value.username,
       name: selectedContact.value.name,
       is_group: selectedContact.value.isGroup,
-      mode: 'auto'
+      mode: 'auto',
+      timeout: 120000
     })
     const added = Number(res?.added || 0)
     importStatus.value = added > 0 ? `新增 ${added} 条` : '已是最新'
@@ -407,7 +361,7 @@ const exportLatest = async () => {
     await refreshSelectedMessages()
   } catch (e) {
     console.error('[static-chat] exportLatest error', e)
-    importStatus.value = '同步失败'
+    importStatus.value = '同步失败：' + (e?.message || '请检查后端')
   } finally {
     importing.value = false
   }
@@ -459,7 +413,8 @@ const importSession = async (session) => {
       name: session.name,
       is_group: session.isGroup,
       mode: 'full',
-      max_messages: 0
+      max_messages: 0,
+      timeout: 600000
     })
     await loadConversations()
     const conv = conversations.value.find((c) => c.username === session.username)
@@ -476,75 +431,10 @@ const importSession = async (session) => {
 }
 
 // ---------------------------------------------------------------------------
-// AI analysis panel
+// AI analysis panel (dedicated StaticAiPanel component handles the rest)
 // ---------------------------------------------------------------------------
 const aiPanelOpen = ref(false)
-const aiConfigured = ref(null) // null = unknown, true / false once loaded
-const aiConfigModel = ref('')
-const aiModels = ref([])
-const aiModel = ref('')
-const aiLoading = ref(false)
-const aiError = ref('')
-const aiResult = ref('')
-const aiMaxMessages = 500
-
-const loadAiModels = async () => {
-  try {
-    const res = await api.getStaticAiModels()
-    aiModels.value = Array.isArray(res?.models) ? res.models : []
-    if (!aiModel.value || !aiModels.value.includes(aiModel.value)) {
-      aiModel.value = res?.default || aiModels.value[0] || ''
-    }
-  } catch {
-    aiModels.value = aiConfigModel.value ? [aiConfigModel.value] : []
-    aiModel.value = aiConfigModel.value
-  }
-}
-
-const loadAiConfig = async () => {
-  try {
-    const res = await api.getStaticAiConfig()
-    aiConfigured.value = !!res?.configured
-    aiConfigModel.value = res?.model || ''
-    if (aiConfigured.value) await loadAiModels()
-  } catch {
-    aiConfigured.value = false
-  }
-}
-
-const toggleAiPanel = async () => {
-  aiPanelOpen.value = !aiPanelOpen.value
-  if (aiPanelOpen.value && aiConfigured.value === null) {
-    await loadAiConfig()
-  }
-}
-
-const runAnalyze = async (kind) => {
-  if (!selectedContact.value || aiLoading.value) return
-  aiLoading.value = true
-  aiError.value = ''
-  aiResult.value = ''
-  try {
-    const res = await api.analyzeStaticConversation({
-      account: selectedAccount.value,
-      username: selectedContact.value.username,
-      kind,
-      model: aiModel.value || null,
-      max_messages: aiMaxMessages
-    })
-    aiResult.value = res?.content || '(空结果)'
-  } catch (e) {
-    aiError.value = e?.data?.detail || e?.message || 'AI 分析失败'
-  } finally {
-    aiLoading.value = false
-  }
-}
-
-// Reset AI output when switching conversations.
-watch(() => selectedContact.value?.username, () => {
-  aiResult.value = ''
-  aiError.value = ''
-})
+const toggleAiPanel = () => { aiPanelOpen.value = !aiPanelOpen.value }
 
 onMounted(async () => {
   await chatAccounts.ensureLoaded()
@@ -606,24 +496,6 @@ watch(selectedAccount, async () => {
   background: var(--app-surface-soft, #ececec);
   border-color: #07b75b;
   color: #07b75b;
-}
-
-.static-ai-panel {
-  width: 340px;
-  min-width: 340px;
-  background: var(--app-surface-bg, #fff);
-  border-color: var(--app-border, #e7e7e7);
-}
-
-.static-ai-panel code {
-  background: var(--app-surface-soft, #f2f2f2);
-  padding: 0 4px;
-  border-radius: 3px;
-  font-size: 11px;
-}
-
-.ai-result {
-  color: var(--app-text-primary, #222);
 }
 
 .chat-header {

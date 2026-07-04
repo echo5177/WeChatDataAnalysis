@@ -8,8 +8,17 @@ export const useStaticApi = () => {
   const baseURL = useApiBase()
   const baseApi = useApi()
 
+  // Default 30s timeout so an unresponsive/dead backend surfaces as an error
+  // instead of hanging the UI forever. Long operations pass a larger timeout.
   const request = async (url, options = {}) => {
-    return await $fetch(url, { baseURL, ...options })
+    try {
+      return await $fetch(url, { baseURL, timeout: 30000, ...options })
+    } catch (e) {
+      if (e?.name === 'AbortError' || /aborted|timeout/i.test(String(e?.message || ''))) {
+        throw new Error('请求超时，请确认后端(dev 服务)是否在运行')
+      }
+      throw e
+    }
   }
 
   // Drop-in replacement for api.listChatMessages used by useChatMessages.
@@ -43,6 +52,8 @@ export const useStaticApi = () => {
   const importStaticConversation = async (payload = {}) => {
     return await request('/static/import', {
       method: 'POST',
+      // full import of a huge group can take minutes; caller may override.
+      timeout: payload.timeout == null ? 300000 : Number(payload.timeout),
       body: {
         account: payload.account || null,
         username: payload.username,
@@ -86,6 +97,58 @@ export const useStaticApi = () => {
     return await request(url)
   }
 
+  const listStaticAiMembers = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.start_time != null) query.set('start_time', String(params.start_time))
+    if (params && params.end_time != null) query.set('end_time', String(params.end_time))
+    const url = '/static/ai/members' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const listStaticAiChats = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.kind) query.set('kind', params.kind)
+    if (params && params.target_user != null) query.set('target_user', params.target_user)
+    const url = '/static/ai/chats' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const createStaticAiChat = async (payload = {}) => {
+    return await request('/static/ai/chats', {
+      method: 'POST',
+      body: {
+        account: payload.account || null,
+        username: payload.username,
+        kind: payload.kind || 'summary',
+        target_user: payload.target_user || '',
+        target_name: payload.target_name || '',
+        title: payload.title || '',
+        start_time: payload.start_time == null ? null : Number(payload.start_time),
+        end_time: payload.end_time == null ? null : Number(payload.end_time)
+      }
+    })
+  }
+
+  const getStaticAiChat = async (chatId) => {
+    return await request(`/static/ai/chats/${encodeURIComponent(String(chatId))}`)
+  }
+
+  const deleteStaticAiChat = async (chatId) => {
+    return await request(`/static/ai/chats/${encodeURIComponent(String(chatId))}`, { method: 'DELETE' })
+  }
+
+  const sendStaticAiChat = async (chatId, payload = {}) => {
+    return await request(`/static/ai/chats/${encodeURIComponent(String(chatId))}/send`, {
+      method: 'POST',
+      timeout: 300000,
+      body: { content: payload.content, model: payload.model || null }
+    })
+  }
+
   // Expose the full base API plus the archive-backed overrides.
   return {
     ...baseApi,
@@ -96,6 +159,12 @@ export const useStaticApi = () => {
     getStaticAiConfig,
     getStaticAiModels,
     analyzeStaticConversation,
-    listStaticAiArtifacts
+    listStaticAiArtifacts,
+    listStaticAiMembers,
+    listStaticAiChats,
+    createStaticAiChat,
+    getStaticAiChat,
+    deleteStaticAiChat,
+    sendStaticAiChat
   }
 }
