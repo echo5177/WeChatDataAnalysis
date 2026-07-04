@@ -48,9 +48,42 @@ export const useStaticApi = () => {
         username: payload.username,
         name: payload.name || null,
         is_group: payload.is_group == null ? null : !!payload.is_group,
-        max_messages: payload.max_messages == null ? 2000 : Number(payload.max_messages)
+        mode: payload.mode || 'auto',
+        max_messages: payload.max_messages == null ? 0 : Number(payload.max_messages)
       }
     })
+  }
+
+  const getStaticAiConfig = async () => {
+    return await request('/static/ai/config')
+  }
+
+  const getStaticAiModels = async () => {
+    return await request('/static/ai/models')
+  }
+
+  const analyzeStaticConversation = async (payload = {}) => {
+    return await request('/static/ai/analyze', {
+      method: 'POST',
+      body: {
+        account: payload.account || null,
+        username: payload.username,
+        kind: payload.kind || 'summary',
+        model: payload.model || null,
+        start_time: payload.start_time == null ? null : Number(payload.start_time),
+        end_time: payload.end_time == null ? null : Number(payload.end_time),
+        max_messages: payload.max_messages == null ? 500 : Number(payload.max_messages)
+      }
+    })
+  }
+
+  const listStaticAiArtifacts = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params && params.account) query.set('account', params.account)
+    if (params && params.username) query.set('username', params.username)
+    if (params && params.kind) query.set('kind', params.kind)
+    const url = '/static/ai/artifacts' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
   }
 
   // Expose the full base API plus the archive-backed overrides.
@@ -59,6 +92,10 @@ export const useStaticApi = () => {
     listChatMessages,
     listStaticConversations,
     getStaticCheckpoint,
-    importStaticConversation
+    importStaticConversation,
+    getStaticAiConfig,
+    getStaticAiModels,
+    analyzeStaticConversation,
+    listStaticAiArtifacts
   }
 }
