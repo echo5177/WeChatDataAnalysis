@@ -121,3 +121,4 @@ pro-shots/
 
 # 隔离验收数据库、真实聊天资料和本地状态快照不得进入版本库。
 /tmp/deepagents-migration/
+/scratch_*.py

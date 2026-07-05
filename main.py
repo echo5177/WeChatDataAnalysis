@@ -10,6 +10,7 @@
 
 import multiprocessing
 import os
+import sys
 from pathlib import Path
 
 # Keep standalone/frozen launches safe when scanner code uses multiprocessing.
@@ -63,7 +64,15 @@ def main():
     print("=" * 60)
     
     repo_root = Path(__file__).resolve().parent
+    # NOTE: uvicorn's in-process reloader is INCOMPATIBLE with the native WCDB
+    # engine (the reloader-spawned worker fails to init the DLL and never binds),
+    # so it stays OFF by default. For dev hot-reload use an external whole-process
+    # watcher instead — see dev_watch.py / README (`uv run dev_watch.py`), which
+    # restarts the entire process cleanly on code changes.
     enable_reload = os.environ.get("WECHAT_TOOL_RELOAD", "0") == "1"
+    if enable_reload:
+        print("热更新(uvicorn reload): 开启 —— 注意：可能与原生 WCDB 引擎冲突，若启动异常请改用 dev_watch.py")
+    print("=" * 60)
 
     # 启动API服务
     uvicorn.run(
