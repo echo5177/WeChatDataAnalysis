@@ -35,6 +35,7 @@ pnpm-lock.yaml
 /.claude/settings.local.json
 .env
 .env.*
+!.env.example
 
 # Local dev repos and data
 /WxDatDecrypt/

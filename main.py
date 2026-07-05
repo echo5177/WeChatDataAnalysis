@@ -23,6 +23,16 @@ from wechat_decrypt_tool.desktop_parent_watchdog import (
     start_desktop_parent_watchdog_from_env,
 )
 from wechat_decrypt_tool.native_core_client import configure_native_core_entrypoint
+
+# Persist dev config across runs: load a repo-root `.env` so LLM_API_KEY /
+# WECHAT_TOOL_PORT / WECHAT_TOOL_DATA_DIR don't need to be typed on every startup.
+# Values already set in the shell environment still take precedence (override=False).
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+except Exception:
+    pass
 from wechat_decrypt_tool.network_access import get_lan_access_host
 from wechat_decrypt_tool.runtime_settings import (
     read_effective_backend_host,
