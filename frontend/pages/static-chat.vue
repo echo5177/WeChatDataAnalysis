@@ -47,7 +47,7 @@
             {{ selectedContact.name }}
           </h2>
           <div class="ml-auto flex items-center gap-3">
-            <span v-if="importStatus" class="text-xs text-gray-400">{{ importStatus }}</span>
+            <span v-if="importStatus" class="text-xs text-gray-400" :class="{ 'cursor-help': importStatusTip }" :title="importStatusTip">{{ importStatus }}</span>
             <button
               type="button"
               class="static-btn text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
@@ -341,11 +341,23 @@ const selectConversation = async (conv) => {
 // ---------------------------------------------------------------------------
 const importing = ref(false)
 const importStatus = ref('')
+const importStatusTip = ref('')
+
+const fmtLatest = (ts) => {
+  const t = Number(ts || 0)
+  if (!t) return ''
+  try {
+    return new Date(t * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return ''
+  }
+}
 
 const exportLatest = async () => {
   if (!selectedContact.value || importing.value) return
   importing.value = true
   importStatus.value = ''
+  importStatusTip.value = ''
   try {
     const res = await api.importStaticConversation({
       account: selectedAccount.value,
@@ -356,12 +368,20 @@ const exportLatest = async () => {
       timeout: 120000
     })
     const added = Number(res?.added || 0)
-    importStatus.value = added > 0 ? `新增 ${added} 条` : '已是最新'
+    const source = String(res?.source || 'decrypted')
+    const srcLabel = source === 'realtime' ? '实时' : (source === 'decrypted' ? '快照' : source)
+    const latest = fmtLatest(res?.latestTime || res?.conversation?.lastTime)
+    const head = added > 0 ? `新增 ${added} 条` : '已是最新'
+    importStatus.value = `${head} · ${srcLabel}${latest ? ` · 最新 ${latest}` : ''}`
+    importStatusTip.value = source === 'realtime'
+      ? '来源：实时读取微信活库（微信正在运行），已是真正的最新消息。'
+      : '来源：已解密的数据库快照。若微信有更新的消息，需先在原版工具做实时同步/重新解密，或开着微信再点此按钮（会自动改读实时）。'
     await loadConversations()
     await refreshSelectedMessages()
   } catch (e) {
     console.error('[static-chat] exportLatest error', e)
     importStatus.value = '同步失败：' + (e?.message || '请检查后端')
+    importStatusTip.value = ''
   } finally {
     importing.value = false
   }

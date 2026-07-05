@@ -107,7 +107,8 @@ class StaticImportRequest(BaseModel):
 
 def _fetch_live_page(
     request: Request, account: str, username: str, offset: int, order: str, limit: int = _IMPORT_PAGE_SIZE
-) -> list[dict]:
+) -> tuple[list[dict], str]:
+    """Fetch one page and report the resolved data source ('realtime' | 'decrypted')."""
     try:
         resp = list_chat_messages(
             request,
@@ -116,6 +117,7 @@ def _fetch_live_page(
             limit=limit,
             offset=offset,
             order=order,
+            source="auto",
         )
     except HTTPException:
         raise
@@ -123,29 +125,32 @@ def _fetch_live_page(
         logger.exception("[static-import] live fetch failed: %s", e)
         raise HTTPException(status_code=500, detail=f"读取实时消息失败: {e}")
     if not isinstance(resp, dict):
-        return []
-    return list(resp.get("messages") or [])
+        return [], ""
+    return list(resp.get("messages") or []), str(resp.get("source") or "")
 
 
-def _fetch_full(request: Request, account: str, username: str, cap: int) -> list[dict]:
+def _fetch_full(request: Request, account: str, username: str, cap: int) -> tuple[list[dict], str]:
     """Import as much of the conversation as possible (asc pages, newest-first order)."""
     unbounded = cap <= 0
     collected: list[dict] = []
+    source = ""
     offset = 0
     for _ in range(_IMPORT_MAX_PAGES):
-        batch = _fetch_live_page(request, account, username, offset, "asc")
+        batch, src = _fetch_live_page(request, account, username, offset, "asc")
+        if src and not source:
+            source = src
         if not batch:
             break
         collected.extend(batch)
         offset += _IMPORT_PAGE_SIZE
         if not unbounded and len(collected) >= cap:
-            return collected[:cap]
+            return collected[:cap], source
         if len(batch) < _IMPORT_PAGE_SIZE:
             break
-    return collected
+    return collected, source
 
 
-def _fetch_incremental(request: Request, account: str, username: str, boundary: int) -> list[dict]:
+def _fetch_incremental(request: Request, account: str, username: str, boundary: int) -> tuple[list[dict], str]:
     """Walk newest→older (desc pages) and stop once we pass the checkpoint time.
 
     Only messages with createTime >= boundary are collected; the boundary message
@@ -153,10 +158,13 @@ def _fetch_incremental(request: Request, account: str, username: str, boundary: 
     same-second messages.
     """
     collected: list[dict] = []
+    source = ""
     offset = 0
     page = _INCREMENTAL_PAGE_SIZE
     for _ in range(_IMPORT_MAX_PAGES):
-        batch = _fetch_live_page(request, account, username, offset, "desc", limit=page)
+        batch, src = _fetch_live_page(request, account, username, offset, "desc", limit=page)
+        if src and not source:
+            source = src
         if not batch:
             break
         reached_old = False
@@ -170,7 +178,7 @@ def _fetch_incremental(request: Request, account: str, username: str, boundary: 
         offset += page
         if len(batch) < page:
             break
-    return collected
+    return collected, source
 
 
 @router.post("/api/static/import", summary="从实时管线导入/刷新一个会话到静态归档")
@@ -191,9 +199,9 @@ def import_static_conversation(req: StaticImportRequest, request: Request):
         mode = "incremental" if boundary > 0 else "full"
 
     if mode == "incremental":
-        collected = _fetch_incremental(request, account, username, boundary)
+        collected, source = _fetch_incremental(request, account, username, boundary)
     else:
-        collected = _fetch_full(request, account, username, int(req.max_messages or 0))
+        collected, source = _fetch_full(request, account, username, int(req.max_messages or 0))
 
     added = store.upsert_messages(account, username, collected)
 
@@ -216,6 +224,8 @@ def import_static_conversation(req: StaticImportRequest, request: Request):
         "account": account,
         "username": username,
         "mode": mode,
+        "source": source or "decrypted",
+        "latestTime": int((conv or {}).get("lastTime") or 0),
         "imported": len(collected),
         "added": added,
         "conversation": conv,

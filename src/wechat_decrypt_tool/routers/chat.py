@@ -695,6 +695,15 @@ def _is_chat_realtime_available(account_dir: Path) -> bool:
     """Best-effort capability check for reading the live WeChat WCDB store."""
 
     try:
+        from ..wechat_detection import get_process_list
+        proc_list = get_process_list()
+        running = any(name.lower() in ("weixin.exe", "wechat.exe") for _, name in proc_list)
+        if not running:
+            return False
+    except Exception:
+        pass
+
+    try:
         info = WCDB_REALTIME.get_status(account_dir)
     except Exception:
         return False
