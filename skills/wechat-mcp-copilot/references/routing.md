@@ -11,6 +11,7 @@ Use this first for every WeChatDataAnalysis MCP task.
 - Backend health, logs, MCP LAN access, port, system settings, key/decrypt/import/data preparation, index/cache build, export, realtime sync, local editing, or data deletion requests: explain that these operations are not exposed through MCP and should be handled in the desktop/web app.
 - Fuzzy person/group/official account: load `target-resolution.md`.
 - Chat content, recent messages, keyword search: load `chats.md`.
+- Archived / static snapshot / knowledge-base / reproducible history (the user's curated `static_archive.db`, independent of the live decrypted DB): use the `wechat.static.*` package — start with `wechat.static.list_conversations`, then `wechat.static.read_range` for bulk chronological ingestion or `wechat.static.search_messages` for lookups. Prefer these over `wechat.chat.*` whenever the user says "归档 / 静态 / 知识库 / archive".
 - Moments / 朋友圈 / likes / comments / post media: load `moments.md`.
 - Images, videos, emoji, files, voice resources: load `media.md`.
 - Rankings, yearly summary, activity stats: load `analytics.md`; if Wrapped cache is missing, ask the user to generate it in the app.
