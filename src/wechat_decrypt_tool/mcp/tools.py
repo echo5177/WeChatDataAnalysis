@@ -1391,6 +1391,147 @@ def _tools_catalog(args: dict[str, Any], _: McpToolContext) -> dict[str, Any]:
     return payload
 
 
+# ---------------------------------------------------------------------------
+# Static archive (static_archive.db) — decoupled from the live decrypted DB.
+# These tools read the user's curated, frozen archive, ideal for building a
+# reproducible knowledge base with external agents.
+# ---------------------------------------------------------------------------
+
+def _static_store():
+    from .. import static_archive_store as store
+
+    return store
+
+
+def _static_account(args: dict[str, Any]) -> str:
+    acc = _opt_str(args, "account")
+    if acc:
+        return acc
+    accounts = _list_decrypted_accounts()
+    if accounts:
+        return accounts[0]
+    raise ValueError("No account specified and no decrypted account found.")
+
+
+def _static_compact_msg(m: dict[str, Any]) -> dict[str, Any]:
+    """Project a stored message dict down to the fields an agent needs to read."""
+    if m.get("isSent"):
+        sender = "我"
+    else:
+        sender = str(m.get("senderDisplayName") or "").strip() or str(m.get("senderUsername") or "").strip()
+    out: dict[str, Any] = {
+        "time": int(m.get("createTime") or 0),
+        "sender": sender,
+        "senderUsername": str(m.get("senderUsername") or ""),
+        "type": m.get("type"),
+        "text": _clip_text(m.get("content") or "", 800),
+    }
+    for src, dst in (("title", "title"), ("url", "url"), ("quoteContent", "quote")):
+        value = m.get(src)
+        if value:
+            out[dst] = _clip_text(value, 300)
+    if m.get("_conversation"):
+        out["conversation"] = m["_conversation"]
+    return out
+
+
+def _static_list_conversations(args: dict[str, Any], _: McpToolContext) -> dict[str, Any]:
+    store = _static_store()
+    acc = _static_account(args)
+    convs = store.list_conversations(acc)
+    return {"status": "success", "account": acc, "count": len(convs), "conversations": _clip_deep(convs, max_items=200)}
+
+
+def _static_get_messages(args: dict[str, Any], _: McpToolContext) -> dict[str, Any]:
+    store = _static_store()
+    acc = _static_account(args)
+    username = _str(args, "username") or _str(args, "session_id")
+    if not username:
+        raise ValueError("username is required.")
+    result = store.list_messages(
+        acc,
+        username,
+        limit=_int(args, "limit", 50, minimum=1, maximum=200),
+        offset=_int(args, "offset", 0, minimum=0),
+    )
+    messages = [_static_compact_msg(m) for m in result.get("messages") or []]
+    return {
+        "status": "success",
+        "account": acc,
+        "username": username,
+        "source": "static",
+        "total": int(result.get("total") or 0),
+        "hasMore": bool(result.get("hasMore")),
+        "messages": _clip_deep(messages, max_items=200),
+    }
+
+
+def _static_read_range(args: dict[str, Any], _: McpToolContext) -> dict[str, Any]:
+    store = _static_store()
+    acc = _static_account(args)
+    username = _str(args, "username") or _str(args, "session_id")
+    if not username:
+        raise ValueError("username is required.")
+    rows = store.list_messages_chrono(
+        acc,
+        username,
+        start_time=_int(args, "start_time", 0, minimum=0),
+        end_time=_int(args, "end_time", 0, minimum=0),
+        limit=_int(args, "limit", 200, minimum=0, maximum=1000),
+    )
+    messages = [_static_compact_msg(m) for m in rows]
+    return {
+        "status": "success",
+        "account": acc,
+        "username": username,
+        "source": "static",
+        "count": len(messages),
+        "messages": _clip_deep(messages, max_items=1000),
+    }
+
+
+def _static_search_messages(args: dict[str, Any], _: McpToolContext) -> dict[str, Any]:
+    store = _static_store()
+    acc = _static_account(args)
+    query = _str(args, "query") or _str(args, "q")
+    if not query:
+        raise ValueError("query is required.")
+    result = store.search_messages(
+        acc,
+        query,
+        username=_opt_str(args, "username") or _opt_str(args, "session_id"),
+        start_time=_int(args, "start_time", 0, minimum=0),
+        end_time=_int(args, "end_time", 0, minimum=0),
+        limit=_int(args, "limit", 30, minimum=1, maximum=200),
+        offset=_int(args, "offset", 0, minimum=0),
+    )
+    messages = [_static_compact_msg(m) for m in result.get("messages") or []]
+    return {
+        "status": "success",
+        "account": acc,
+        "query": query,
+        "source": "static",
+        "total": int(result.get("total") or 0),
+        "hasMore": bool(result.get("hasMore")),
+        "messages": _clip_deep(messages, max_items=200),
+    }
+
+
+def _static_list_members(args: dict[str, Any], _: McpToolContext) -> dict[str, Any]:
+    store = _static_store()
+    acc = _static_account(args)
+    username = _str(args, "username") or _str(args, "session_id")
+    if not username:
+        raise ValueError("username is required.")
+    members = store.list_members(
+        acc,
+        username,
+        start_time=_int(args, "start_time", 0, minimum=0),
+        end_time=_int(args, "end_time", 0, minimum=0),
+    )
+    return {"status": "success", "account": acc, "username": username, "count": len(members), "members": _clip_deep(members, max_items=300)}
+
+
 COMMON_ACCOUNT = {"account": string_schema("Optional chat account name.")}
 CHAT_SOURCE = {
     "source": string_schema(
@@ -1425,6 +1566,12 @@ def _install_tools() -> None:
     _register("wechat.chat.get_message_raw", "Return raw decrypted fields for one message. Use only for debugging or missing structured fields.", object_schema({**COMMON_ACCOUNT, "username": string_schema("Session username."), "message_id": string_schema("Message id.")}, required=["username", "message_id"]), _message_raw, package="wechat.chat")
     _register("wechat.chat.resolve_chat_history", "Resolve a merged-forward chat history AppMsg by server_id.", object_schema({**COMMON_ACCOUNT, "server_id": string_schema("Message server id as an exact decimal string.")}, required=["server_id"]), _resolve_chat_history, package="wechat.chat")
     _register("wechat.chat.resolve_app_message", "Resolve an AppMsg/card/miniprogram message by server_id.", object_schema({**COMMON_ACCOUNT, "server_id": string_schema("Message server id as an exact decimal string.")}, required=["server_id"]), _resolve_app_message, package="wechat.chat")
+
+    _register("wechat.static.list_conversations", "List conversations saved in the static archive (static_archive.db) — a curated, frozen snapshot decoupled from the live decrypted DB. Start here before other wechat.static.* tools.", object_schema(COMMON_ACCOUNT), _static_list_conversations, package="wechat.static")
+    _register("wechat.static.get_messages", "Read one page of archived messages for a conversation (newest page first, ascending within the page). Returns compact fields: time, sender, type, text.", object_schema({**COMMON_ACCOUNT, **PAGING, "username": string_schema("Archived conversation username, e.g. 49192810916@chatroom.")}, required=["username"]), _static_get_messages, package="wechat.static")
+    _register("wechat.static.read_range", "Read archived messages in ascending chronological order within an optional time window. Best for bulk knowledge-base ingestion. limit=0 returns all in range.", object_schema({**COMMON_ACCOUNT, "username": string_schema("Archived conversation username."), "start_time": int_schema("Optional Unix seconds start.", minimum=0), "end_time": int_schema("Optional Unix seconds end.", minimum=0), "limit": int_schema("Keep most recent N within range (0 = all).", minimum=0, maximum=1000)}, required=["username"]), _static_read_range, package="wechat.static")
+    _register("wechat.static.search_messages", "Substring search over archived messages (matches text content, sender names, quoted text). CJK supported. Newest-first, paginated. Omit username to search all archived conversations.", object_schema({**COMMON_ACCOUNT, **PAGING, "query": string_schema("Search text."), "username": string_schema("Optional: restrict to one archived conversation."), "start_time": int_schema("Optional Unix seconds start.", minimum=0), "end_time": int_schema("Optional Unix seconds end.", minimum=0)}, required=["query"]), _static_search_messages, package="wechat.static")
+    _register("wechat.static.list_members", "Rank participants of an archived group by message count within an optional time window.", object_schema({**COMMON_ACCOUNT, "username": string_schema("Archived group username."), "start_time": int_schema("Optional Unix seconds start.", minimum=0), "end_time": int_schema("Optional Unix seconds end.", minimum=0)}, required=["username"]), _static_list_members, package="wechat.static")
 
     _register("wechat.moments.get_self_info", "Return Moments self wxid and display name.", object_schema(COMMON_ACCOUNT), _sns_self_info, package="wechat.moments")
     _register("wechat.moments.list_timeline", "List Moments timeline by users, keyword, and pagination.", object_schema({**COMMON_ACCOUNT, **PAGING, "usernames": array_schema("Optional poster usernames.", string_schema("Username.")), "keyword": string_schema("Optional content keyword.")}), _sns_timeline, package="wechat.moments")
