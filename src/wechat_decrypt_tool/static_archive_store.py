@@ -323,6 +323,73 @@ def list_messages(
         conn.close()
 
 
+def search_messages(
+    account: str,
+    query: str,
+    *,
+    username: Optional[str] = None,
+    start_time: int = 0,
+    end_time: int = 0,
+    limit: int = 30,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Substring search over archived messages, newest-first, with paging.
+
+    Matches ``query`` anywhere in the stored message dict (text ``content``,
+    sender names, quoted text, titles, etc.) via a ``LIKE`` on the raw JSON
+    payload. Payloads are stored with ``ensure_ascii=False`` so CJK matches
+    directly. When ``username`` is omitted, searches across all archived
+    conversations and tags each hit with ``_conversation``.
+
+    Caveat: because it scans the raw payload, English query terms that happen to
+    be JSON field names (e.g. ``content``, ``url``) can over-match; CJK/content
+    queries do not have this problem.
+    """
+    q = str(query or "").strip()
+    if not q:
+        return {"total": 0, "hasMore": False, "messages": []}
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        clauses = ["account=?"]
+        params: list[Any] = [account]
+        if username:
+            clauses.append("username=?")
+            params.append(username)
+        if start_time:
+            clauses.append("create_time>=?")
+            params.append(int(start_time))
+        if end_time:
+            clauses.append("create_time<=?")
+            params.append(int(end_time))
+        clauses.append("payload LIKE ? ESCAPE '\\'")
+        like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        params.append(like)
+        where = " AND ".join(clauses)
+        total = int(
+            conn.execute(f"SELECT COUNT(*) AS c FROM messages WHERE {where}", params).fetchone()["c"]
+        )
+        rows = conn.execute(
+            f"SELECT username, payload FROM messages WHERE {where}"
+            " ORDER BY create_time DESC, local_id DESC LIMIT ? OFFSET ?",
+            (*params, limit, offset),
+        ).fetchall()
+        messages: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                m = json.loads(r["payload"])
+            except Exception:
+                continue
+            if username is None:
+                m["_conversation"] = r["username"]
+            messages.append(m)
+        return {"total": total, "hasMore": (offset + limit) < total, "messages": messages}
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Checkpoints
 # ---------------------------------------------------------------------------
