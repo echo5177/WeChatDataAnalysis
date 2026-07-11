@@ -247,6 +247,25 @@
         </div>
       </div>
 
+      <!-- Cross-group person profiles -->
+      <div
+        class="sidebar-rail-action w-full h-[var(--sidebar-rail-step)] flex items-center justify-center cursor-pointer group"
+        title="跨群人物画像"
+        @click="goPersons"
+      >
+        <div class="sidebar-rail-plate w-[var(--sidebar-rail-btn)] h-[var(--sidebar-rail-btn)] rounded-md flex items-center justify-center transition-colors bg-transparent">
+          <div class="sidebar-rail-icon w-[var(--sidebar-rail-icon)] h-[var(--sidebar-rail-icon)]" :class="{ 'sidebar-rail-icon-active': isPersonsRoute }">
+            <svg class="w-full h-full" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M17 20h5v-2a4 4 0 0 0-3-3.87" />
+              <path d="M9 20H4v-2a4 4 0 0 1 3-3.87" />
+              <circle cx="12" cy="8" r="3.2" />
+              <path d="M18 9.5a2.6 2.6 0 0 0-2.5-2.6" />
+              <path d="M6 9.5A2.6 2.6 0 0 1 8.5 6.9" />
+            </svg>
+          </div>
+        </div>
+      </div>
+
       <!-- Export -->
       <div
         v-if="showGlobalExportEntry"
@@ -801,6 +820,7 @@ const isFinderRoute = computed(() => route.path?.startsWith('/finder'))
 const isPaymentsRoute = computed(() => route.path?.startsWith('/payments'))
 const isWrappedRoute = computed(() => route.path?.startsWith('/wrapped'))
 const isStaticRoute = computed(() => route.path?.startsWith('/static-chat'))
+const isPersonsRoute = computed(() => route.path?.startsWith('/static-persons'))
 
 const goChat = async () => { await navigateTo('/chat') }
 const goSns = async () => { await navigateTo('/sns') }
@@ -812,6 +832,7 @@ const goFinder = async () => { await navigateTo('/finder') }
 const goPayments = async () => { await navigateTo('/payments') }
 const goWrapped = async () => { await navigateTo('/wrapped') }
 const goStatic = async () => { await navigateTo('/static-chat') }
+const goPersons = async () => { await navigateTo('/static-persons') }
 const goGuide = async () => { await navigateTo('/') }
 const goSettings = () => { openSettingsDialog() }
 
