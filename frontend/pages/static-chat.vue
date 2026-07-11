@@ -51,8 +51,8 @@
             <button
               type="button"
               class="static-btn text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5"
-              :disabled="importing"
-              title="从断点接续导入最新消息"
+              :disabled="importing || anyImporting"
+              :title="anyImporting && !importing ? '有其他会话正在同步，请稍候' : '从断点接续导入最新消息'"
               @click="exportLatest"
             >
               <svg v-if="!importing" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -172,7 +172,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import MessageList from '~/components/chat/MessageList.vue'
@@ -337,11 +337,25 @@ const selectConversation = async (conv) => {
 }
 
 // ---------------------------------------------------------------------------
-// "导出最新消息" — incremental import from the checkpoint
+// "导出最新消息" — incremental import from the checkpoint.
+// State is scoped per-conversation (by username) so switching conversations
+// mid-import never shows another conversation as "syncing".
 // ---------------------------------------------------------------------------
-const importing = ref(false)
-const importStatus = ref('')
-const importStatusTip = ref('')
+const exportingUsername = ref('')
+const importStatusMap = reactive({}) // username -> { status, tip }
+
+// True only when the *currently viewed* conversation is the one importing.
+const importing = computed(
+  () => !!selectedContact.value && exportingUsername.value === selectedContact.value.username
+)
+// Any import in flight — used to prevent starting a second concurrent import.
+const anyImporting = computed(() => !!exportingUsername.value)
+const importStatus = computed(
+  () => (selectedContact.value ? (importStatusMap[selectedContact.value.username]?.status || '') : '')
+)
+const importStatusTip = computed(
+  () => (selectedContact.value ? (importStatusMap[selectedContact.value.username]?.tip || '') : '')
+)
 
 const fmtLatest = (ts) => {
   const t = Number(ts || 0)
@@ -354,16 +368,17 @@ const fmtLatest = (ts) => {
 }
 
 const exportLatest = async () => {
-  if (!selectedContact.value || importing.value) return
-  importing.value = true
-  importStatus.value = ''
-  importStatusTip.value = ''
+  const contact = selectedContact.value
+  if (!contact || exportingUsername.value) return // one import at a time
+  const targetUsername = contact.username
+  exportingUsername.value = targetUsername
+  importStatusMap[targetUsername] = { status: '', tip: '' }
   try {
     const res = await api.importStaticConversation({
       account: selectedAccount.value,
-      username: selectedContact.value.username,
-      name: selectedContact.value.name,
-      is_group: selectedContact.value.isGroup,
+      username: targetUsername,
+      name: contact.name,
+      is_group: contact.isGroup,
       mode: 'auto',
       timeout: 120000
     })
@@ -372,18 +387,20 @@ const exportLatest = async () => {
     const srcLabel = source === 'realtime' ? '实时' : (source === 'decrypted' ? '快照' : source)
     const latest = fmtLatest(res?.latestTime || res?.conversation?.lastTime)
     const head = added > 0 ? `新增 ${added} 条` : '已是最新'
-    importStatus.value = `${head} · ${srcLabel}${latest ? ` · 最新 ${latest}` : ''}`
-    importStatusTip.value = source === 'realtime'
-      ? '来源：实时读取微信活库（微信正在运行），已是真正的最新消息。'
-      : '来源：已解密的数据库快照。若微信有更新的消息，需先在原版工具做实时同步/重新解密，或开着微信再点此按钮（会自动改读实时）。'
+    importStatusMap[targetUsername] = {
+      status: `${head} · ${srcLabel}${latest ? ` · 最新 ${latest}` : ''}`,
+      tip: source === 'realtime'
+        ? '来源：实时读取微信活库（微信正在运行），已是真正的最新消息。'
+        : '来源：已解密的数据库快照。若微信有更新的消息，需先在原版工具做实时同步/重新解密，或开着微信再点此按钮（会自动改读实时）。'
+    }
     await loadConversations()
-    await refreshSelectedMessages()
+    // Only refresh the message pane if the user is still viewing this conversation.
+    if (selectedContact.value?.username === targetUsername) await refreshSelectedMessages()
   } catch (e) {
     console.error('[static-chat] exportLatest error', e)
-    importStatus.value = '同步失败：' + (e?.message || '请检查后端')
-    importStatusTip.value = ''
+    importStatusMap[targetUsername] = { status: '同步失败：' + (e?.message || '请检查后端'), tip: '' }
   } finally {
-    importing.value = false
+    if (exportingUsername.value === targetUsername) exportingUsername.value = ''
   }
 }
 
