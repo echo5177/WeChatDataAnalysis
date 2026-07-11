@@ -35,13 +35,24 @@
         >用户画像</button>
       </div>
 
-      <!-- Time range -->
-      <div class="flex items-center gap-1.5 px-3 py-2 border-b text-[11px] text-gray-500">
+      <!-- Time range (isolated per tab) -->
+      <div class="flex items-center gap-1.5 px-3 pt-2 text-[11px] text-gray-500">
         <span class="shrink-0">时间</span>
         <input type="date" v-model="startDate" class="ai-input flex-1 px-1 py-0.5 rounded min-w-0" />
         <span>~</span>
         <input type="date" v-model="endDate" class="ai-input flex-1 px-1 py-0.5 rounded min-w-0" />
         <button v-if="startDate || endDate" type="button" class="shrink-0 text-gray-400 hover:text-gray-700" title="清除" @click="clearRange">✕</button>
+      </div>
+      <!-- Quick presets -->
+      <div class="flex items-center flex-wrap gap-1 px-3 py-2 border-b">
+        <button
+          v-for="p in rangePresets"
+          :key="p.days"
+          type="button"
+          class="ai-range-preset text-[11px] px-2 py-0.5 rounded-full"
+          :class="{ 'ai-range-preset-active': activePreset === p.days }"
+          @click="applyPreset(p.days)"
+        >{{ p.label }}</button>
       </div>
 
       <!-- ===== SUMMARY TAB ===== -->
@@ -94,7 +105,7 @@
           </div>
           <div class="flex-1 overflow-y-auto min-h-0">
             <div v-if="membersLoading" class="text-center text-xs text-gray-400 py-8">加载成员中...</div>
-            <div v-else-if="!members.length" class="text-center text-xs text-gray-400 py-8">无成员数据</div>
+            <div v-else-if="!members.length" class="text-center text-xs text-gray-400 py-8">该时间段内无成员数据</div>
             <div
               v-for="(m, i) in members"
               :key="m.username"
@@ -113,7 +124,7 @@
             </div>
           </div>
         </template>
-        <!-- member chat -->
+        <!-- selected member: TA's messages OR AI chat -->
         <template v-else>
           <div class="flex items-center gap-2 px-3 py-2 border-b">
             <button type="button" class="text-gray-400 hover:text-gray-700 shrink-0" title="返回成员列表" @click="backToMembers">
@@ -122,17 +133,40 @@
             <div class="w-6 h-6 rounded overflow-hidden bg-gray-300 flex-shrink-0" :class="{ 'privacy-blur': privacyMode }">
               <img v-if="memberAvatar(selectedMember)" :src="memberAvatar(selectedMember)" class="w-full h-full object-cover" referrerpolicy="no-referrer" />
             </div>
-            <div class="text-[13px] font-medium truncate" :class="{ 'privacy-blur': privacyMode }">{{ selectedMember.name }}</div>
+            <div class="text-[13px] font-medium truncate flex-1" :class="{ 'privacy-blur': privacyMode }">{{ selectedMember.name }}</div>
           </div>
+
+          <!-- messages view -->
+          <div v-if="memberView === 'messages'" class="flex-1 flex flex-col min-h-0">
+            <div class="flex items-center gap-2 px-3 py-1.5 border-b">
+              <div class="text-[11px] text-gray-400 flex-1 truncate">TA 的发言 · {{ memberMessages.length }} 条{{ rangeLabel }}</div>
+              <button type="button" class="ai-btn text-[11px] px-2.5 py-1 rounded shrink-0" @click="goToMemberChat">✨ AI 分析 TA</button>
+            </div>
+            <div class="flex-1 overflow-y-auto min-h-0 px-3 py-2">
+              <div v-if="memberMessagesLoading" class="text-center text-xs text-gray-400 py-8">加载发言中...</div>
+              <div v-else-if="!memberMessages.length" class="text-center text-xs text-gray-400 py-8">该时间段内没有发言</div>
+              <div
+                v-for="(m, i) in memberMessages"
+                :key="i"
+                class="member-msg text-[12px] leading-relaxed py-1"
+              >
+                <span class="text-gray-400 mr-1.5 whitespace-nowrap">{{ msgTime(m) }}</span>
+                <span :class="{ 'privacy-blur': privacyMode }">{{ msgText(m) }}</span>
+              </div>
+            </div>
+          </div>
+          <!-- AI chat view -->
           <StaticAiThread
-            v-if="activeChat && activeChat.kind === 'profile'"
+            v-else-if="activeChat && activeChat.kind === 'profile'"
             :turns="turns"
             :sending="sending"
             :error="threadError"
             :presets="currentPresets"
             :privacy-mode="privacyMode"
-            :show-back="false"
+            :show-back="true"
+            back-label="‹ 返回 TA 的发言"
             @send="send"
+            @back="backToMemberMessages"
           />
           <div v-else class="flex-1 flex items-center justify-center text-xs text-gray-400">准备对话中...</div>
         </template>
@@ -142,7 +176,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { useStaticApi } from '~/composables/useStaticApi'
 import StaticAiThread from '~/components/static-chat/StaticAiThread.vue'
 
@@ -161,8 +195,52 @@ const models = ref([])
 const model = ref('')
 const activeTab = ref('summary')
 
-const startDate = ref('')
-const endDate = ref('')
+// ---- per-tab isolated time ranges (summary vs profile do NOT share) ----
+const ranges = reactive({
+  summary: { start: '', end: '' },
+  profile: { start: '', end: '' }
+})
+const startDate = computed({
+  get: () => ranges[activeTab.value].start,
+  set: (v) => { ranges[activeTab.value].start = v || '' }
+})
+const endDate = computed({
+  get: () => ranges[activeTab.value].end,
+  set: (v) => { ranges[activeTab.value].end = v || '' }
+})
+
+const pad2 = (n) => String(n).padStart(2, '0')
+const fmtDate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
+
+const rangePresets = [
+  { label: '今天', days: 1 },
+  { label: '近7天', days: 7 },
+  { label: '近30天', days: 30 },
+  { label: '近90天', days: 90 },
+  { label: '全部', days: 0 }
+]
+
+const presetRange = (days) => {
+  if (!days) return { start: '', end: '' }
+  const end = new Date()
+  const start = new Date()
+  start.setDate(start.getDate() - (days - 1))
+  return { start: fmtDate(start), end: fmtDate(end) }
+}
+
+const applyPreset = (days) => {
+  const r = presetRange(days)
+  startDate.value = r.start
+  endDate.value = r.end
+}
+
+const activePreset = computed(() => {
+  for (const p of rangePresets) {
+    const r = presetRange(p.days)
+    if (r.start === (startDate.value || '') && r.end === (endDate.value || '')) return p.days
+  }
+  return null
+})
 
 const toUnix = (s, end = false) => {
   if (!s) return null
@@ -189,6 +267,26 @@ const scopeLabel = (c) => {
 const clearRange = () => {
   startDate.value = ''
   endDate.value = ''
+}
+
+// ---- media placeholders for message previews ----
+const MEDIA = {
+  image: '[图片]', video: '[视频]', voice: '[语音]', emoji: '[表情]', file: '[文件]',
+  link: '[链接]', transfer: '[转账]', redPacket: '[红包]', chatHistory: '[聊天记录]', voip: '[通话]'
+}
+const msgText = (m) => {
+  const rt = String(m?.renderType || 'text')
+  if (rt === 'text' || rt === 'quote') return String(m?.content || '').trim() || '[空]'
+  return MEDIA[rt] || (String(m?.content || '').trim() || `[${rt}]`)
+}
+const msgTime = (m) => {
+  const t = Number(m?.createTime || 0)
+  if (!t) return ''
+  try {
+    return new Date(t * 1000).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+  } catch {
+    return ''
+  }
 }
 
 // ---- shared chat thread state ----
@@ -236,7 +334,7 @@ const startChat = async (kind, member = null) => {
       account: props.account,
       username: props.conversation.username,
       kind,
-      target_user: member?.username || '',
+      target_user: member ? (member.isSelf ? '__self__' : member.username) : '',
       target_name: member?.name || '',
       start_time: toUnix(startDate.value),
       end_time: toUnix(endDate.value, true)
@@ -294,6 +392,11 @@ const members = ref([])
 const membersLoading = ref(false)
 const selectedMember = ref(null)
 
+// member detail: 'messages' shows TA's real messages, 'chat' shows the AI thread
+const memberView = ref('messages')
+const memberMessages = ref([])
+const memberMessagesLoading = ref(false)
+
 const loadMembers = async () => {
   if (!props.conversation) return
   membersLoading.value = true
@@ -312,6 +415,27 @@ const loadMembers = async () => {
   }
 }
 
+const loadMemberMessages = async () => {
+  if (!props.conversation || !selectedMember.value) return
+  memberMessagesLoading.value = true
+  try {
+    const res = await api.listStaticPersonMessages({
+      account: props.account,
+      username: props.conversation.username,
+      target_user: selectedMember.value.isSelf ? '__self__' : selectedMember.value.username,
+      is_self: !!selectedMember.value.isSelf,
+      start_time: toUnix(startDate.value),
+      end_time: toUnix(endDate.value, true),
+      limit: 2000
+    })
+    memberMessages.value = Array.isArray(res?.messages) ? res.messages : []
+  } catch {
+    memberMessages.value = []
+  } finally {
+    memberMessagesLoading.value = false
+  }
+}
+
 const switchToProfile = () => {
   activeTab.value = 'profile'
   activeChat.value = null
@@ -325,15 +449,32 @@ const memberAvatar = (m) => {
   return `${apiBase}/chat/avatar?account=${encodeURIComponent(acc)}&username=${encodeURIComponent(u)}`
 }
 
+// Click a member → show TA's real messages (NOT a blank AI box).
 const openMemberProfile = async (m) => {
   selectedMember.value = m
+  memberView.value = 'messages'
   activeChat.value = null
-  await startChat('profile', m)
+  turns.value = []
+  await loadMemberMessages()
+}
+
+// "AI 分析 TA" button → open (create/reuse) the profile chat for the current range.
+const goToMemberChat = async () => {
+  memberView.value = 'chat'
+  if (!activeChat.value || activeChat.value.kind !== 'profile') {
+    await startChat('profile', selectedMember.value)
+  }
+}
+
+const backToMemberMessages = () => {
+  memberView.value = 'messages'
 }
 
 const backToMembers = () => {
   selectedMember.value = null
   activeChat.value = null
+  memberView.value = 'messages'
+  memberMessages.value = []
 }
 
 // ---- reset when conversation changes ----
@@ -342,6 +483,8 @@ watch(() => props.conversation?.username, () => {
   turns.value = []
   selectedMember.value = null
   members.value = []
+  memberMessages.value = []
+  memberView.value = 'messages'
   summaryChats.value = []
   if (props.conversation) {
     loadSummaryChats()
@@ -349,9 +492,14 @@ watch(() => props.conversation?.username, () => {
   }
 })
 
-// reload member ranking when range changes on profile tab
+// Reload profile-tab data when its range changes (member ranking or TA's messages).
 watch([startDate, endDate], () => {
-  if (activeTab.value === 'profile' && !selectedMember.value) loadMembers()
+  if (activeTab.value !== 'profile') return
+  if (selectedMember.value) {
+    if (memberView.value === 'messages') loadMemberMessages()
+  } else {
+    loadMembers()
+  }
 })
 
 loadConfig()
@@ -390,16 +538,20 @@ if (props.conversation) loadSummaryChats()
 .ai-btn:hover:not(:disabled) { opacity: .88; }
 .ai-btn:disabled { opacity: .5; cursor: not-allowed; }
 
-.ai-preset {
+.ai-range-preset {
   border: 1px solid var(--app-border, #ddd);
   color: var(--app-text-muted, #666);
   background: var(--app-surface-bg, #fff);
+  transition: border-color .12s, color .12s, background-color .12s;
 }
-.ai-preset:hover:not(:disabled) { border-color: #07b75b; color: #07b75b; }
-.ai-preset:disabled { opacity: .5; cursor: not-allowed; }
+.ai-range-preset:hover { border-color: #07b75b; color: #07b75b; }
+.ai-range-preset-active { border-color: #07b75b; color: #fff; background: #07b75b; }
 
 .ai-chat-row { transition: background-color .12s; }
 .ai-chat-row:hover { background: var(--app-surface-soft, #f5f5f5); }
+
+.member-msg { border-bottom: 1px solid var(--app-border, #f0f0f0); }
+.member-msg:last-child { border-bottom: none; }
 
 .ai-msg-row { display: flex; margin-bottom: 10px; }
 .ai-msg-user { justify-content: flex-end; }

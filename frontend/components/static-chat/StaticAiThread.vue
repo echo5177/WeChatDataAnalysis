@@ -1,7 +1,7 @@
 <template>
   <div class="flex-1 flex flex-col min-h-0">
     <div v-if="showBack" class="px-3 py-1.5 border-b">
-      <button type="button" class="text-[11px] text-gray-400 hover:text-gray-700" @click="$emit('back')">‹ 返回对话列表</button>
+      <button type="button" class="text-[11px] text-gray-400 hover:text-gray-700" @click="$emit('back')">{{ backLabel }}</button>
     </div>
 
     <div ref="scrollEl" class="flex-1 overflow-y-auto min-h-0 p-3">
@@ -64,7 +64,8 @@ const props = defineProps({
   error: { type: String, default: '' },
   presets: { type: Array, default: () => [] },
   privacyMode: { type: Boolean, default: false },
-  showBack: { type: Boolean, default: false }
+  showBack: { type: Boolean, default: false },
+  backLabel: { type: String, default: '‹ 返回对话列表' }
 })
 const emit = defineEmits(['send', 'back'])
 

@@ -107,6 +107,40 @@ export const useStaticApi = () => {
     return await request(url)
   }
 
+  const listStaticPersonMessages = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params.account) query.set('account', params.account)
+    if (params.username) query.set('username', params.username)
+    if (params.target_user != null) query.set('target_user', params.target_user)
+    if (params.is_self) query.set('is_self', 'true')
+    if (params.start_time != null) query.set('start_time', String(params.start_time))
+    if (params.end_time != null) query.set('end_time', String(params.end_time))
+    if (params.limit != null) query.set('limit', String(params.limit))
+    const url = '/static/ai/person_messages' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const listStaticPersons = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params.account) query.set('account', params.account)
+    if (params.start_time != null) query.set('start_time', String(params.start_time))
+    if (params.end_time != null) query.set('end_time', String(params.end_time))
+    if (params.top != null) query.set('top', String(params.top))
+    const url = '/static/persons' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
+  const listStaticPersonGlobalMessages = async (params = {}) => {
+    const query = new URLSearchParams()
+    if (params.account) query.set('account', params.account)
+    if (params.target_user != null) query.set('target_user', params.target_user)
+    if (params.start_time != null) query.set('start_time', String(params.start_time))
+    if (params.end_time != null) query.set('end_time', String(params.end_time))
+    if (params.limit != null) query.set('limit', String(params.limit))
+    const url = '/static/persons/messages' + (query.toString() ? `?${query.toString()}` : '')
+    return await request(url)
+  }
+
   const listStaticAiChats = async (params = {}) => {
     const query = new URLSearchParams()
     if (params && params.account) query.set('account', params.account)
@@ -161,6 +195,9 @@ export const useStaticApi = () => {
     analyzeStaticConversation,
     listStaticAiArtifacts,
     listStaticAiMembers,
+    listStaticPersonMessages,
+    listStaticPersons,
+    listStaticPersonGlobalMessages,
     listStaticAiChats,
     createStaticAiChat,
     getStaticAiChat,
