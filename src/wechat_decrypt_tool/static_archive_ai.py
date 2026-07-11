@@ -28,6 +28,11 @@ logger = get_logger(__name__)
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-chat"
 
+# Sentinel conversation username for a cross-group person profile chat: its
+# context is one person's messages gathered across ALL archived conversations,
+# not a single conversation. Kept in sync with the frontend.
+GLOBAL_PERSON_USERNAME = "@person"
+
 # Keep the transcript under a safe character budget for a single-pass request.
 _TRANSCRIPT_CHAR_BUDGET = 16000
 _DEFAULT_MAX_MESSAGES = 500
@@ -123,10 +128,64 @@ def build_transcript(messages: list[dict[str, Any]], *, char_budget: int = _TRAN
     return text
 
 
+def build_person_transcript(messages: list[dict[str, Any]], *, char_budget: int = _CHAT_TRANSCRIPT_CHAR_BUDGET) -> str:
+    """Transcript for one person's cross-group messages, each line tagged with its group."""
+    lines: list[str] = []
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        rt = str(m.get("renderType") or "text")
+        if rt == "system":
+            continue
+        if rt in ("text", "quote"):
+            content = str(m.get("content") or "").strip()
+        else:
+            content = _MEDIA_PLACEHOLDER.get(rt) or (str(m.get("content") or "").strip() or f"[{rt}]")
+        content = content.replace("\n", " ").strip()
+        if not content:
+            continue
+        grp = str(m.get("_conversationName") or "").strip()
+        prefix = f"[{_fmt_time(m.get('createTime'))}]" + (f"（{grp}）" if grp else " ")
+        lines.append(f"{prefix}{content}")
+    text = "\n".join(lines)
+    if len(text) > char_budget:
+        text = text[-char_budget:]
+        text = text[text.find("\n") + 1:]
+    return text
+
+
+def _build_person_context(chat: dict[str, Any]) -> tuple[str, int]:
+    """System message for a cross-group person profile (username == GLOBAL_PERSON_USERNAME)."""
+    account = chat["account"]
+    target_user = str(chat.get("targetUser") or "").strip()
+    target_name = str(chat.get("targetName") or target_user or "该用户").strip()
+    is_self = target_user == "__self__"
+    msgs = store.list_person_messages_global(
+        account,
+        target_user,
+        is_self=is_self,
+        start_time=int(chat.get("startTime") or 0),
+        end_time=int(chat.get("endTime") or 0),
+        limit=_CHAT_CONTEXT_MAX_MESSAGES,
+    )
+    transcript = build_person_transcript(msgs)
+    groups = sorted({str(m.get("_conversationName") or "").strip() for m in msgs if m.get("_conversationName")})
+    system = (
+        f"你是一名中文人物画像分析助手。下面是同一个人「{target_name}」在 TA 参与的多个群聊里的发言汇总"
+        "（每行格式为 [时间]（群名）发言内容）。请综合 TA 在不同群体中的表达，分析 TA 的性格特点、"
+        "关注点与兴趣、专业能力，以及在不同群里的角色/表现差异。只依据这些发言客观分析，"
+        "不要编造，不确定处标注（推测），避免刻板印象。"
+        f"\n\n涉及群聊：{('、'.join(groups)) or '（无）'}\n\n【「{target_name}」的跨群发言】\n{transcript}"
+    )
+    return system, len(msgs)
+
+
 def build_chat_context(chat: dict[str, Any]) -> tuple[str, int]:
     """Build the system message (context transcript + role instruction) for a chat."""
     account = chat["account"]
     username = chat["username"]
+    if username == GLOBAL_PERSON_USERNAME and chat.get("kind") == "profile":
+        return _build_person_context(chat)
     msgs = store.list_messages_chrono(
         account,
         username,

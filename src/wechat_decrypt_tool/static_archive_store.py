@@ -593,6 +593,198 @@ def list_members(
         conn.close()
 
 
+def list_sender_messages(
+    account: str,
+    username: str,
+    sender_username: str,
+    *,
+    is_self: bool = False,
+    start_time: int = 0,
+    end_time: int = 0,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    """Return one participant's own messages inside a single conversation.
+
+    Ascending chronological. When ``limit`` > 0, keeps the most recent ``limit``.
+    ``is_self`` selects the archive owner's own messages (``isSent``); otherwise
+    matches ``senderUsername``.
+    """
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        clauses = ["account=?", "username=?"]
+        params: list[Any] = [account, username]
+        if start_time:
+            clauses.append("create_time>=?")
+            params.append(int(start_time))
+        if end_time:
+            clauses.append("create_time<=?")
+            params.append(int(end_time))
+        where = " AND ".join(clauses)
+        rows = conn.execute(
+            f"SELECT payload FROM messages WHERE {where}"
+            " ORDER BY create_time DESC, local_id DESC",
+            params,
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                m = json.loads(r["payload"])
+            except Exception:
+                continue
+            if is_self:
+                if not m.get("isSent"):
+                    continue
+            else:
+                if m.get("isSent"):
+                    continue
+                if str(m.get("senderUsername") or "").strip() != sender_username:
+                    continue
+            out.append(m)
+            if limit and len(out) >= int(limit):
+                break
+        out.reverse()
+        return out
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Cross-conversation persons (a person may appear in several archived groups)
+# ---------------------------------------------------------------------------
+
+def list_all_persons(
+    account: str, *, start_time: int = 0, end_time: int = 0, top: int = 500
+) -> list[dict[str, Any]]:
+    """Aggregate senders across ALL archived conversations, keyed by wxid.
+
+    Returns per person: total count, the groups they appear in (with per-group
+    counts), sorted by total activity. The same wxid across groups is merged.
+    """
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        crows = conn.execute(
+            "SELECT username, name FROM conversations WHERE account=?", (account,)
+        ).fetchall()
+        conv_names = {r["username"]: (r["name"] or r["username"]) for r in crows}
+        clauses = ["account=?"]
+        params: list[Any] = [account]
+        if start_time:
+            clauses.append("create_time>=?")
+            params.append(int(start_time))
+        if end_time:
+            clauses.append("create_time<=?")
+            params.append(int(end_time))
+        where = " AND ".join(clauses)
+        rows = conn.execute(
+            f"SELECT username AS conv, payload FROM messages WHERE {where}", params
+        ).fetchall()
+        persons: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            conv = r["conv"]
+            try:
+                m = json.loads(r["payload"])
+            except Exception:
+                continue
+            if m.get("isSent"):
+                key, nm, is_self = "__self__", "我", True
+            else:
+                key = str(m.get("senderUsername") or "").strip()
+                if not key:
+                    continue
+                nm = str(m.get("senderDisplayName") or "").strip() or key
+                is_self = False
+            p = persons.get(key)
+            if p is None:
+                p = {"username": key, "name": nm, "count": 0, "isSelf": is_self, "_groups": {}}
+                persons[key] = p
+            p["count"] += 1
+            p["_groups"][conv] = p["_groups"].get(conv, 0) + 1
+            if nm and p["name"] == key:
+                p["name"] = nm
+        out: list[dict[str, Any]] = []
+        for p in persons.values():
+            groups = [
+                {"username": g, "name": conv_names.get(g, g), "count": c}
+                for g, c in sorted(p["_groups"].items(), key=lambda x: x[1], reverse=True)
+            ]
+            out.append(
+                {
+                    "username": p["username"],
+                    "name": p["name"],
+                    "count": p["count"],
+                    "isSelf": p["isSelf"],
+                    "groupCount": len(groups),
+                    "groups": groups,
+                }
+            )
+        out.sort(key=lambda x: x["count"], reverse=True)
+        return out[: int(top)]
+    finally:
+        conn.close()
+
+
+def list_person_messages_global(
+    account: str,
+    sender_username: str,
+    *,
+    is_self: bool = False,
+    start_time: int = 0,
+    end_time: int = 0,
+    limit: int = 1500,
+) -> list[dict[str, Any]]:
+    """Return one person's own messages across ALL archived conversations.
+
+    Ascending chronological; each message is tagged with ``_conversation`` and
+    ``_conversationName``. When ``limit`` > 0, keeps the most recent ``limit``.
+    """
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        crows = conn.execute(
+            "SELECT username, name FROM conversations WHERE account=?", (account,)
+        ).fetchall()
+        conv_names = {r["username"]: (r["name"] or r["username"]) for r in crows}
+        clauses = ["account=?"]
+        params: list[Any] = [account]
+        if start_time:
+            clauses.append("create_time>=?")
+            params.append(int(start_time))
+        if end_time:
+            clauses.append("create_time<=?")
+            params.append(int(end_time))
+        where = " AND ".join(clauses)
+        rows = conn.execute(
+            f"SELECT username AS conv, payload FROM messages WHERE {where}"
+            " ORDER BY create_time DESC, local_id DESC",
+            params,
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            try:
+                m = json.loads(r["payload"])
+            except Exception:
+                continue
+            if is_self:
+                if not m.get("isSent"):
+                    continue
+            else:
+                if m.get("isSent"):
+                    continue
+                if str(m.get("senderUsername") or "").strip() != sender_username:
+                    continue
+            m["_conversation"] = r["conv"]
+            m["_conversationName"] = conv_names.get(r["conv"], r["conv"])
+            out.append(m)
+            if limit and len(out) >= int(limit):
+                break
+        out.reverse()
+        return out
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # AI chats (multi-turn, with memory)
 # ---------------------------------------------------------------------------
@@ -742,6 +934,33 @@ def set_ai_chat_title(chat_id: int, title: str) -> None:
     try:
         _ensure_initialized(conn)
         conn.execute("UPDATE ai_chats SET title=? WHERE id=?", (title, int(chat_id)))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def set_ai_chat_scope(
+    chat_id: int, *, start_time: int = 0, end_time: int = 0, target_name: Optional[str] = None
+) -> None:
+    """Update a chat's analysed time window (and optionally target name).
+
+    Used when an empty chat is reused so a newly-picked date range actually takes
+    effect instead of silently keeping the old scope.
+    """
+    now = int(time.time())
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        if target_name is None:
+            conn.execute(
+                "UPDATE ai_chats SET start_time=?, end_time=?, updated_at=? WHERE id=?",
+                (int(start_time or 0), int(end_time or 0), now, int(chat_id)),
+            )
+        else:
+            conn.execute(
+                "UPDATE ai_chats SET start_time=?, end_time=?, target_name=?, updated_at=? WHERE id=?",
+                (int(start_time or 0), int(end_time or 0), target_name, now, int(chat_id)),
+            )
         conn.commit()
     finally:
         conn.close()

@@ -337,6 +337,71 @@ async def list_static_members(
     return {"status": "success", "account": account, "username": username, "members": members}
 
 
+@router.get("/api/static/ai/person_messages", summary="某成员在该会话中、指定时间段内的发言")
+async def get_static_person_messages(
+    username: str,
+    target_user: str,
+    account: Optional[str] = None,
+    is_self: bool = False,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+    limit: int = 1000,
+):
+    if not username:
+        raise HTTPException(status_code=400, detail="Missing username.")
+    account = _resolve_account(account)
+    msgs = store.list_sender_messages(
+        account,
+        username,
+        target_user,
+        is_self=bool(is_self),
+        start_time=int(start_time or 0),
+        end_time=int(end_time or 0),
+        limit=int(limit or 1000),
+    )
+    return {"status": "success", "account": account, "username": username, "count": len(msgs), "messages": msgs}
+
+
+# ---------------------------------------------------------------------------
+# Cross-group persons (同一个人可能出现在多个群聊)
+# ---------------------------------------------------------------------------
+
+@router.get("/api/static/persons", summary="跨会话聚合人物（按 wxid 合并，列出所在群聊）")
+async def list_static_persons(
+    account: Optional[str] = None,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+    top: int = 500,
+):
+    account = _resolve_account(account)
+    persons = store.list_all_persons(
+        account, start_time=int(start_time or 0), end_time=int(end_time or 0), top=int(top or 500)
+    )
+    return {"status": "success", "account": account, "persons": persons}
+
+
+@router.get("/api/static/persons/messages", summary="某人在所有归档群聊里的发言（跨群）")
+async def get_static_person_global_messages(
+    target_user: str,
+    account: Optional[str] = None,
+    start_time: Optional[int] = None,
+    end_time: Optional[int] = None,
+    limit: int = 1500,
+):
+    if not target_user:
+        raise HTTPException(status_code=400, detail="Missing target_user.")
+    account = _resolve_account(account)
+    msgs = store.list_person_messages_global(
+        account,
+        target_user,
+        is_self=(target_user == "__self__"),
+        start_time=int(start_time or 0),
+        end_time=int(end_time or 0),
+        limit=int(limit or 1500),
+    )
+    return {"status": "success", "account": account, "target_user": target_user, "count": len(msgs), "messages": msgs}
+
+
 # ---------------------------------------------------------------------------
 # AI chats (multi-turn with memory)
 # ---------------------------------------------------------------------------
@@ -361,13 +426,23 @@ def create_ai_chat_ep(req: AiChatCreateRequest):
         raise HTTPException(status_code=400, detail="未配置 LLM。请设置 LLM_API_KEY 后重启后端。")
 
     # Prevent spamming empty chats: reuse an existing empty one for the same scope.
+    # BUT refresh its time window (and target name) to the current selection — otherwise
+    # a newly-picked date range would be silently ignored and the AI would keep reading
+    # the old range.
     if store.has_empty_ai_chat(account, req.username, req.kind, req.target_user):
         existing = [
             c for c in store.list_ai_chats(account, req.username, kind=req.kind, target_user=req.target_user)
             if c["turnCount"] == 0
         ]
         if existing:
-            return {"status": "success", "chat": existing[0], "reused": True}
+            chat = existing[0]
+            store.set_ai_chat_scope(
+                chat["id"],
+                start_time=int(req.start_time or 0),
+                end_time=int(req.end_time or 0),
+                target_name=(req.target_name or chat.get("targetName") or ""),
+            )
+            return {"status": "success", "chat": store.get_ai_chat(chat["id"]), "reused": True}
 
     if req.kind == "profile":
         title = req.title or (req.target_name or req.target_user or "用户画像")
