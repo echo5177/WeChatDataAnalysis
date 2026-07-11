@@ -16,8 +16,10 @@ echo [2/2] 启动前端（Nuxt，改前端代码自动刷新）...
 start "WeChat 前端" cmd /k "npm --prefix frontend run dev"
 
 echo.
-echo 正在等待服务就绪，随后自动打开浏览器（约 12 秒）...
-timeout /t 12 >nul
+echo 正在等待前端编译就绪（首次较慢，请耐心等待，会自动打开，无需手动刷新）...
+rem 轮询并"预热"目标页面：Invoke-WebRequest 会触发 Nuxt/Vite 的按需编译，
+rem 只有当页面真正编译好、返回 200 后才打开浏览器，避免黑屏/需手动刷新。
+powershell -NoProfile -Command "$u='http://localhost:3000/static-chat'; for($i=0;$i -lt 180;$i++){ try{ $r=Invoke-WebRequest -UseBasicParsing -Uri $u -TimeoutSec 5; if($r.StatusCode -eq 200){ Write-Host '  前端已就绪，正在打开浏览器...'; break } }catch{ Start-Sleep -Milliseconds 800 } }"
 start "" http://localhost:3000/static-chat
 
 echo.

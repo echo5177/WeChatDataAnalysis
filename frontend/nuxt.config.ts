@@ -55,6 +55,23 @@ export default defineNuxtConfig({
       }
     }
   },
+
+  // Pre-compile the heaviest routes on dev-server boot so the first browser hit
+  // isn't stuck on-demand compiling (which caused a black screen + forced refresh).
+  vite: {
+    server: {
+      warmup: {
+        clientFiles: [
+          './app.vue',
+          './pages/static-chat.vue',
+          './pages/static-persons.vue',
+          './components/static-chat/StaticAiPanel.vue',
+          './components/static-chat/StaticAiThread.vue',
+          './components/chat/MessageList.vue'
+        ]
+      }
+    }
+  },
   
   // 「高级功能」弹窗复用官网的 pro-demos 演示引擎（website/assets 下），跨根导入需要别名，
   // 并让 dev server 额外放行 website/assets（保留 Vite 默认推断的工作区根，不把整个仓库暴露给 /@fs/）
