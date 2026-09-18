@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
+import anyio
 from fastapi.encoders import jsonable_encoder
 
 from .errors import JSONRPC_METHOD_NOT_FOUND, McpError
@@ -113,9 +114,15 @@ class McpToolRegistry:
         else:
             raise ValueError("Tool arguments must be an object.")
 
-        result = tool.handler(args, context)
-        if inspect.isawaitable(result):
-            result = await result
+        if inspect.iscoroutinefunction(tool.handler):
+            result = await tool.handler(args, context)
+        else:
+            # Most data tools perform SQLite/native reads.  Keep those blocking
+            # calls off the HTTP/stdio event loop so one large archive query
+            # does not stall every other MCP client.
+            result = await anyio.to_thread.run_sync(tool.handler, args, context)
+            if inspect.isawaitable(result):
+                result = await result
         encoded = _stringify_unsafe_integers(jsonable_encoder(result))
         text = json.dumps(encoded, ensure_ascii=False, indent=2)
         is_error = isinstance(encoded, dict) and str(encoded.get("status") or "").lower() == "error"

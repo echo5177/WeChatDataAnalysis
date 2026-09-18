@@ -62,7 +62,8 @@ dev = [
 ]
 
 [project.scripts]
-wechat-decrypt = "main:main"
+wechat-decrypt = "wechat_decrypt_tool.cli:serve_main"
+wechat-archive = "wechat_decrypt_tool.cli:main"
 
 [build-system]
 requires = ["hatchling"]
