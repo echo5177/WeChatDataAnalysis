@@ -238,6 +238,42 @@ def list_conversations(account: str) -> list[dict[str, Any]]:
         conn.close()
 
 
+def list_accounts() -> list[dict[str, Any]]:
+    """List accounts that actually have content in the static archive.
+
+    The static archive is intentionally independent from the live/decrypted
+    account directories.  Do not create an empty archive database just to
+    answer this discovery call.
+    """
+    if not get_archive_db_path().is_file():
+        return []
+
+    conn = _connect()
+    try:
+        _ensure_initialized(conn)
+        rows = conn.execute(
+            "SELECT account, COUNT(*) AS conversation_count,"
+            " COALESCE(SUM(message_count), 0) AS message_count,"
+            " COALESCE(MIN(NULLIF(first_time, 0)), 0) AS first_time,"
+            " COALESCE(MAX(last_time), 0) AS last_time"
+            " FROM conversations GROUP BY account"
+            " ORDER BY last_time DESC, account ASC"
+        ).fetchall()
+        return [
+            {
+                "account": str(row["account"] or ""),
+                "conversationCount": int(row["conversation_count"] or 0),
+                "messageCount": int(row["message_count"] or 0),
+                "firstTime": int(row["first_time"] or 0),
+                "lastTime": int(row["last_time"] or 0),
+            }
+            for row in rows
+            if str(row["account"] or "").strip()
+        ]
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Messages
 # ---------------------------------------------------------------------------

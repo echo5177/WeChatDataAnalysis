@@ -221,15 +221,24 @@ def _account_arg(args: dict[str, Any]) -> Optional[str]:
 
 def _status(_: dict[str, Any], __: McpToolContext) -> dict[str, Any]:
     accounts = _list_decrypted_accounts()
+    try:
+        archive_accounts = _static_store().list_accounts()
+    except Exception:
+        archive_accounts = []
+    archive_names = [str(item.get("account") or "") for item in archive_accounts if item.get("account")]
     warnings: list[str] = []
-    if not accounts:
+    if not accounts and not archive_names:
         warnings.append("No chat accounts found. Save a db key/db_storage path or import a legacy decrypted account.")
+    elif not accounts:
+        warnings.append("Only static archive data is available; live chat tools are not ready.")
     return {
         "status": "success",
         "version": APP_VERSION,
         "dbReady": bool(accounts),
+        "archiveReady": bool(archive_names),
         "accounts": accounts,
-        "defaultAccount": accounts[0] if accounts else None,
+        "archiveAccounts": archive_accounts,
+        "defaultAccount": accounts[0] if accounts else (archive_names[0] if archive_names else None),
         "toolCount": len(MCP_REGISTRY.tool_names()),
         "packages": sorted({tool.split(".")[1] if tool.startswith("wechat.") and "." in tool else "core" for tool in MCP_REGISTRY.tool_names()}),
         "warnings": warnings,
@@ -238,11 +247,17 @@ def _status(_: dict[str, Any], __: McpToolContext) -> dict[str, Any]:
 
 def _list_accounts(_: dict[str, Any], __: McpToolContext) -> dict[str, Any]:
     accounts = _list_decrypted_accounts()
+    try:
+        archive_accounts = _static_store().list_accounts()
+    except Exception:
+        archive_accounts = []
+    archive_names = [str(item.get("account") or "") for item in archive_accounts if item.get("account")]
     return {
-        "status": "success" if accounts else "error",
+        "status": "success" if accounts or archive_names else "error",
         "accounts": accounts,
-        "defaultAccount": accounts[0] if accounts else None,
-        "message": "" if accounts else "No chat accounts found. Save a db key/db_storage path or import a legacy decrypted account.",
+        "archiveAccounts": archive_accounts,
+        "defaultAccount": accounts[0] if accounts else (archive_names[0] if archive_names else None),
+        "message": "" if accounts or archive_names else "No chat accounts found. Save a db key/db_storage path, import a legacy decrypted account, or create a static archive.",
     }
 
 
@@ -1407,10 +1422,15 @@ def _static_account(args: dict[str, Any]) -> str:
     acc = _opt_str(args, "account")
     if acc:
         return acc
+    archive_accounts = _static_store().list_accounts()
+    if archive_accounts:
+        archive_account = str(archive_accounts[0].get("account") or "").strip()
+        if archive_account:
+            return archive_account
     accounts = _list_decrypted_accounts()
     if accounts:
         return accounts[0]
-    raise ValueError("No account specified and no decrypted account found.")
+    raise ValueError("No account specified and no static or live account found.")
 
 
 def _static_compact_msg(m: dict[str, Any]) -> dict[str, Any]:
@@ -1477,7 +1497,7 @@ def _static_read_range(args: dict[str, Any], _: McpToolContext) -> dict[str, Any
         username,
         start_time=_int(args, "start_time", 0, minimum=0),
         end_time=_int(args, "end_time", 0, minimum=0),
-        limit=_int(args, "limit", 200, minimum=0, maximum=1000),
+        limit=_int(args, "limit", 200, minimum=1, maximum=1000),
     )
     messages = [_static_compact_msg(m) for m in rows]
     return {
@@ -1569,7 +1589,7 @@ def _install_tools() -> None:
 
     _register("wechat.static.list_conversations", "List conversations saved in the static archive (static_archive.db) — a curated, frozen snapshot decoupled from the live decrypted DB. Start here before other wechat.static.* tools.", object_schema(COMMON_ACCOUNT), _static_list_conversations, package="wechat.static")
     _register("wechat.static.get_messages", "Read one page of archived messages for a conversation (newest page first, ascending within the page). Returns compact fields: time, sender, type, text.", object_schema({**COMMON_ACCOUNT, **PAGING, "username": string_schema("Archived conversation username, e.g. 49192810916@chatroom.")}, required=["username"]), _static_get_messages, package="wechat.static")
-    _register("wechat.static.read_range", "Read archived messages in ascending chronological order within an optional time window. Best for bulk knowledge-base ingestion. limit=0 returns all in range.", object_schema({**COMMON_ACCOUNT, "username": string_schema("Archived conversation username."), "start_time": int_schema("Optional Unix seconds start.", minimum=0), "end_time": int_schema("Optional Unix seconds end.", minimum=0), "limit": int_schema("Keep most recent N within range (0 = all).", minimum=0, maximum=1000)}, required=["username"]), _static_read_range, package="wechat.static")
+    _register("wechat.static.read_range", "Read a bounded page of archived messages in ascending chronological order within an optional time window. Best for knowledge-base ingestion.", object_schema({**COMMON_ACCOUNT, "username": string_schema("Archived conversation username."), "start_time": int_schema("Optional Unix seconds start.", minimum=0), "end_time": int_schema("Optional Unix seconds end.", minimum=0), "limit": int_schema("Keep the most recent N messages within the range.", minimum=1, maximum=1000)}, required=["username"]), _static_read_range, package="wechat.static")
     _register("wechat.static.search_messages", "Substring search over archived messages (matches text content, sender names, quoted text). CJK supported. Newest-first, paginated. Omit username to search all archived conversations.", object_schema({**COMMON_ACCOUNT, **PAGING, "query": string_schema("Search text."), "username": string_schema("Optional: restrict to one archived conversation."), "start_time": int_schema("Optional Unix seconds start.", minimum=0), "end_time": int_schema("Optional Unix seconds end.", minimum=0)}, required=["query"]), _static_search_messages, package="wechat.static")
     _register("wechat.static.list_members", "Rank participants of an archived group by message count within an optional time window.", object_schema({**COMMON_ACCOUNT, "username": string_schema("Archived group username."), "start_time": int_schema("Optional Unix seconds start.", minimum=0), "end_time": int_schema("Optional Unix seconds end.", minimum=0)}, required=["username"]), _static_list_members, package="wechat.static")
 
