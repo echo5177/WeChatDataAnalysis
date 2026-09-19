@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import sqlite3
 import sys
@@ -13,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from wechat_decrypt_tool.routers import account_archive_export, import_decrypted
+from wechat_decrypt_tool.native_core_export import NativeSealedExportResult
 
 
 def _create_sqlite(path: Path, statements: list[str]) -> None:
@@ -65,7 +67,24 @@ def _export_account(account_dir: Path, output_dir: Path) -> Path:
     with account_archive_export._JOBS_LOCK:
         account_archive_export._JOBS[job.export_id] = job
     try:
-        with patch.object(account_archive_export, "_resolve_account_dir", return_value=account_dir):
+        def seal_without_private_broker(export_id, manifest):
+            payload = bytes(manifest)
+            return NativeSealedExportResult(
+                export_id=str(export_id),
+                manifest_size=len(payload),
+                manifest_sha256=hashlib.sha256(payload).hexdigest(),
+                seal_format="WES1",
+                envelope=b"WES1-test-only-envelope",
+            )
+
+        # Public source checkouts intentionally do not contain the licensed
+        # native broker.  This suite exercises portable ZIP layout and hash
+        # verification, so replace only the native envelope signer; production
+        # export still requires the broker.
+        with (
+            patch.object(account_archive_export, "_resolve_account_dir", return_value=account_dir),
+            patch("wechat_decrypt_tool.export_integrity.seal_export_manifest", side_effect=seal_without_private_broker),
+        ):
             account_archive_export._run_account_archive_export(
                 job.export_id,
                 {

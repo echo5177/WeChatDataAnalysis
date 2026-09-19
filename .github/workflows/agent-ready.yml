@@ -23,6 +23,7 @@ jobs:
       - name: Verify CLI, MCP, archive, and repository contracts
         run: >-
           uv run --frozen pytest
+          tests/test_account_archive_cross_platform.py
           tests/test_agent_ready_cli.py
           tests/test_agent_repository_contract.py
           tests/test_mcp_stdio.py
