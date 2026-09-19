@@ -1,0 +1,3 @@
+interface:
+  display_name: "WeChat Data Operator"
+  short_description: "Analyze authorized local WeChat data safely"

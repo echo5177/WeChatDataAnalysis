@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "wechat-data-analysis": {
+      "type": "stdio",
+      "command": "uv",
+      "args": ["run", "--frozen", "wechat-archive", "mcp", "stdio"]
+    }
+  }
+}
