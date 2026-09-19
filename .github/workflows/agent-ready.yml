@@ -1,0 +1,31 @@
+name: Agent-ready contract
+
+on:
+  push:
+    branches: [main, agent-ready]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --group dev
+      - name: Audit public tree
+        run: uv run --frozen python tools/audit_public_repo.py
+      - name: Verify CLI, MCP, archive, and repository contracts
+        run: >-
+          uv run --frozen pytest
+          tests/test_agent_ready_cli.py
+          tests/test_agent_repository_contract.py
+          tests/test_mcp_stdio.py
+          tests/test_static_archive_mcp.py
+          tests/test_mcp_router.py
+          -q

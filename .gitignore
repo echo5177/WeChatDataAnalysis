@@ -21,7 +21,6 @@ wheels/
 /.idea
 /.history/
 /.augment/
-/CLAUDE.md
 
 # Local config templates
 /wechat_db_config_template.json
@@ -36,6 +35,16 @@ pnpm-lock.yaml
 .env
 .env.*
 !.env.example
+*.db
+*.sqlite
+*.sqlite3
+account_keys.json
+runtime_settings.json
+*.pem
+*.p12
+*.pfx
+*.har
+*.pcap
 
 # Local dev repos and data
 /WxDatDecrypt/
