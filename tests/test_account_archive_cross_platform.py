@@ -14,7 +14,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from wechat_decrypt_tool.routers import account_archive_export, import_decrypted
-from wechat_decrypt_tool.native_core_export import NativeSealedExportResult
 
 
 def _create_sqlite(path: Path, statements: list[str]) -> None:
@@ -67,23 +66,35 @@ def _export_account(account_dir: Path, output_dir: Path) -> Path:
     with account_archive_export._JOBS_LOCK:
         account_archive_export._JOBS[job.export_id] = job
     try:
-        def seal_without_private_broker(export_id, manifest):
-            payload = bytes(manifest)
-            return NativeSealedExportResult(
-                export_id=str(export_id),
-                manifest_size=len(payload),
-                manifest_sha256=hashlib.sha256(payload).hexdigest(),
-                seal_format="WES1",
-                envelope=b"WES1-test-only-envelope",
-            )
+        class PortableIntegrityZipWriter:
+            def __init__(self, archive):
+                self.archive = archive
+                self.entries = {}
+
+            def __getattr__(self, name):
+                return getattr(self.archive, name)
+
+            def add_file_entry(self, path, arcname):
+                self.entries[str(arcname)] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+        def write_test_integrity_sidecars(writer, _export_id):
+            manifest = {
+                "f": [
+                    {"path": path, "sha256": digest}
+                    for path, digest in sorted(writer.entries.items())
+                ]
+            }
+            writer.writestr("_integrity/manifest.wce", json.dumps(manifest, separators=(",", ":")))
+            writer.writestr("_integrity/signature.wce", "test-only\n")
 
         # Public source checkouts intentionally do not contain the licensed
-        # native broker.  This suite exercises portable ZIP layout and hash
-        # verification, so replace only the native envelope signer; production
-        # export still requires the broker.
+        # native broker or every platform's integrity extension. This suite
+        # exercises portable ZIP layout and real SHA-256 tamper detection with
+        # a test-only writer; production export still requires native signing.
         with (
             patch.object(account_archive_export, "_resolve_account_dir", return_value=account_dir),
-            patch("wechat_decrypt_tool.export_integrity.seal_export_manifest", side_effect=seal_without_private_broker),
+            patch.object(account_archive_export, "IntegrityZipWriter", PortableIntegrityZipWriter),
+            patch.object(account_archive_export, "write_zip_integrity_sidecars", side_effect=write_test_integrity_sidecars),
         ):
             account_archive_export._run_account_archive_export(
                 job.export_id,
