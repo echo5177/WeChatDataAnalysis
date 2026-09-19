@@ -17,6 +17,35 @@
     <p>如果你需要 QQ 侧的数据解密、分析或年度总结类工具，欢迎体验 <a href="https://github.com/H3CoF6/WeQ">H3CoF6/WeQ</a>；WeQ 作者也是本项目开发成员之一</p>
 </div>
 
+## 直接交给 Codex / Claude Code
+
+本 fork 在 [LifeArchiveProject/WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis)
+的 v2.6 架构和完整 Git 历史上增加了静态归档、Agent 控制 CLI、STDIO MCP 与仓库级 Skill。
+上游项目、作者与第三方归属保持不变；本 fork 的目标是让用户无需理解数据库密钥、Bearer token
+或 MCP 配置，也能让编码 Agent 操作本人有权处理的本地微信数据。
+上游当前没有仓库级 `LICENSE`，本 fork 不擅自重许可；公开发布或打包前请阅读
+[Fork 与许可说明](FORK_NOTICE.md)。
+
+准备好 Git、[uv](https://docs.astral.sh/uv/) 和 Codex 或 Claude Code 后：
+
+```bash
+git clone https://github.com/echo5177/WeChatDataAnalysis.git
+cd WeChatDataAnalysis
+codex
+# 或：claude
+```
+
+然后直接说，例如：
+
+```text
+帮我找出最近三个月和「项目名」有关的聊天，按时间线总结，并标出需要我跟进的事项。
+```
+
+仓库内的 `AGENTS.md`、`.agents/skills/`、`.codex/config.toml` 和 `.mcp.json`
+会指导 Agent 自动安装锁定依赖、执行自检并启动本地 STDIO MCP。首次没有可用数据时，Agent
+会启动本地引导；用户只需登录微信并确认处理自己拥有或获授权的数据，不需要复制或理解密钥。
+运行数据保留在本机且已被 Git 忽略。详见 [Agent 快速开始](docs/agent-quickstart.md)。
+
 ## 年度总结
 
 <table>
@@ -245,7 +274,19 @@ npm run dev
 
 ## MCP 服务
 
-设置页中的“AI 接入提示词”会包含 endpoint 和 Bearer token，可直接复制给客户端作为接入指令。
+推荐使用仓库自带的 STDIO MCP：Codex 会读取 `.codex/config.toml`，Claude Code 会读取
+`.mcp.json`。它由客户端按需启动，不需要先启动 Web 服务，也不需要 endpoint 或 Bearer token。
+
+```bash
+# Agent 和 CI 可解析的环境/数据状态
+uv run --frozen wechat-archive doctor --json
+
+# 手工握手调试；正常使用不需要运行
+uv run --frozen wechat-archive mcp stdio
+```
+
+Web/桌面应用仍保留带 Bearer token 的 HTTP MCP，适合手机或局域网客户端。设置页中的
+“AI 接入提示词”会生成对应接入信息。除非确实需要远程客户端，否则保持默认的本机 STDIO 模式。
 
 ## 打包为 EXE（Windows 桌面端）
 
